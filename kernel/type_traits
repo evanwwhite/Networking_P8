@@ -1,0 +1,147 @@
+#pragma once
+
+namespace std {
+
+    /////////////////
+    // is_integral //
+    /////////////////
+
+    template <typename T>
+    struct is_integral {
+        static_assert(false, "no specialization for this type");
+    };
+
+    template <>
+    struct is_integral<unsigned char> {
+        static constexpr bool value = true;
+    };
+
+    template <>
+    struct is_integral<unsigned short> {
+        static constexpr bool value = true;
+    };
+
+    template <>
+    struct is_integral<unsigned int> {
+        static constexpr bool value = true;
+    };
+
+    template <>
+    struct is_integral<unsigned long> {
+        static constexpr bool value = true;
+    };
+
+    template <>
+    struct is_integral<unsigned long long> {
+        static constexpr bool value = true;
+    };
+
+    template <>
+    struct is_integral<signed char> {
+        static constexpr bool value = true;
+    };
+
+    template <>
+    struct is_integral<signed short> {
+        static constexpr bool value = true;
+    };
+
+    template <>
+    struct is_integral<signed int> {
+        static constexpr bool value = true;
+    };
+
+    template <>
+    struct is_integral<signed long> {
+        static constexpr bool value = true;
+    };
+
+    template <>
+    struct is_integral<signed long long> {
+        static constexpr bool value = true;
+    };
+
+    template <typename T>
+    constexpr bool is_integral_v = is_integral<T>::value;
+
+    ///////////////
+    // is_signed //
+    ///////////////
+
+    template <typename T> struct is_signed {
+        static_assert(false, "no specialization for this type");
+    };
+
+    template <> struct is_signed<signed char> { static constexpr bool value = true; };
+    template <> struct is_signed<signed short> { static constexpr bool value = true; };
+    template <> struct is_signed<signed int> { static constexpr bool value = true; };
+    template <> struct is_signed<signed long> { static constexpr bool value = true; };
+    template <> struct is_signed<signed long long> { static constexpr bool value = true; };
+
+    template <> struct is_signed<unsigned char> { static constexpr bool value = false; };
+    template <> struct is_signed<unsigned short> { static constexpr bool value = false; };
+    template <> struct is_signed<unsigned int> { static constexpr bool value = false; };
+    template <> struct is_signed<unsigned long> { static constexpr bool value = false; };
+    template <> struct is_signed<unsigned long long> { static constexpr bool value = false; };
+
+    template <typename T> constexpr bool is_signed_v = is_signed<T>::value;
+
+    /////////////////
+    // is_unsigned //
+    /////////////////
+
+    template <typename T> 
+        struct is_unsigned {
+            static constexpr bool value = !is_signed_v<T>;
+        };
+
+    template <typename T> constexpr bool is_unsigned_v = is_unsigned<T>::value;
+
+    ///////////////////
+    // make_unsigned //
+    ///////////////////
+
+    template <typename T> 
+        struct make_unsigned {
+            static_assert(false, "no specialization for this type");
+        };
+
+    template <> struct make_unsigned<signed char> { using type = unsigned char; };
+    template <> struct make_unsigned<signed short> { using type = unsigned short; };
+    template <> struct make_unsigned<signed int> { using type = unsigned int; };
+    template <> struct make_unsigned<signed long> { using type = unsigned long; };
+    template <> struct make_unsigned<signed long long> { using type = unsigned long long; };
+
+    template <> struct make_unsigned<unsigned char> { using type = unsigned char; };
+    template <> struct make_unsigned<unsigned short> { using type = unsigned short; };
+    template <> struct make_unsigned<unsigned int> { using type = unsigned int; };
+    template <> struct make_unsigned<unsigned long> { using type = unsigned long; };
+    template <> struct make_unsigned<unsigned long long> { using type = unsigned long long; };
+
+    template <typename T> using make_unsigned_t = typename make_unsigned<T>::type;
+
+    /////////////////
+    // make_signed //
+    /////////////////
+
+    template <typename T> 
+        struct make_signed {
+            static_assert(false, "no specialization for this type");
+        };
+    
+
+    template <> struct make_signed<signed char> { using type = signed char; };
+    template <> struct make_signed<signed short> { using type = signed short; };
+    template <> struct make_signed<signed int> { using type = signed int; };
+    template <> struct make_signed<signed long> { using type = signed long; };
+    template <> struct make_signed<signed long long> { using type = signed long long; };
+
+    template <> struct make_signed<unsigned char> { using type = signed char; };
+    template <> struct make_signed<unsigned short> { using type = signed short; };
+    template <> struct make_signed<unsigned int> { using type = signed int; };
+    template <> struct make_signed<unsigned long> { using type = signed long; };
+    template <> struct make_signed<unsigned long long> { using type = signed long long; };
+
+    template <typename T> using make_signed_t = typename make_signed<T>::type;  
+}
+

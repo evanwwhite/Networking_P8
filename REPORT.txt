@@ -1,0 +1,14 @@
+* Why is it a bad idea to run system calls and interrupt
+  handlers on the user stack?
+
+* Can you craft a test case that breaks a kernel that does that?
+
+* How can you defend against such attacks?
+
+* How can a malicious user exploit my naive implementation of write?
+
+* explain the use of the [[gnu::force_align_arg_pointer]] attribute on
+  some functions. Why those functions? Why not all functions?
+
+
+

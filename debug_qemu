@@ -1,0 +1,18 @@
+set -e
+
+UTCS_OPTS='-O0 -g' make clean $1 $1.data
+
+echo "in a different window:"
+echo "   gdb build/kernel.elf"
+echo "   target remote localhost:1234"
+echo "   set breakpoint, etc"
+echo "   continue"
+
+time `make qemu_cmd` `make qemu_config_flags` \
+             -s -S \
+             -no-reboot \
+             -nographic \
+             --monitor none \
+             -drive file=build/$1.img,index=0,media=disk,format=raw,file.locking=off \
+             -drive file=$1.data,index=1,media=disk,format=raw,file.locking=off \
+             -device isa-debug-exit,iobase=0xf4,iosize=0x04 || true
