@@ -1,0 +1,83 @@
+Person 2 Checklist
+
+Create your layer as “raw packet movement behind a stable API,” even before the real virtio device is finished.
+
+1. Define the interface first.
+    Create kernel/virtio_net.h
+    Add bool net_send_raw(const uint8_t* data, size_t len);
+    Add int net_recv_raw(uint8_t* out, size_t max_len);
+    Add bool net_ready();
+    Add void net_debug_dump_frame(const uint8_t* data, size_t len);
+    Add a tiny integration boundary for Person 1, like bool nic_ready(); and void nic_kick_tx();
+
+2. Define the core data structures.
+    Add TX descriptor struct(s)
+    Add RX descriptor struct(s)
+    Add avail/used ring structs
+    Add software-side queue state
+    Add fixed-size packet buffer storage
+    Add constants for queue size, max frame size, descriptor flags
+
+3. Build the software queue manager.
+    Implement TX enqueue logic
+    Implement TX completion reclaim logic
+    Implement RX dequeue logic
+    Implement RX buffer recycle logic
+    Track head/tail or producer/consumer indices cleanly
+    Add safety checks for full/empty rings
+
+4. Build a fake backend so you can work before Person 1 is done.
+    Create kernel/virtio_net.cc
+    Add a fake mode where TX just logs frames
+    Add a fake RX injection path for test packets
+    Simulate used-ring completion
+    Make net_ready() return false gracefully if no backend is installed
+
+5. Implement the public API.
+    net_send_raw(...) should validate length, copy into a TX buffer, enqueue, and notify backend
+    net_recv_raw(...) should return packet length, copy out data, and recycle the RX slot
+    net_debug_dump_frame(...) should print bytes in a readable hex format
+    Return clean failure values instead of panicking on expected conditions
+
+6. Agree on the contract with Person 1.
+    Person 1 should expose a minimal “device is initialized” signal
+    Person 1 should expose queue hookup points, not protocol logic
+    You should not depend on PCI scanning details in your packet API
+    Keep all virtqueue/ring logic on your side if possible
+
+7. Agree on the contract with Person 3.
+    Person 3 should only call net_send_raw(...) and net_recv_raw(...)
+    Person 3 should not know about descriptors, MMIO, or queue indices
+    Decide now what net_recv_raw(...) returns on “no packet available”
+
+8. Add debug output early.
+    Log TX enqueue index changes
+    Log RX dequeue index changes
+    Log packet lengths
+    Add optional frame dumps for first 64 bytes
+    Keep debug prints easy to disable
+
+9. Test without the real NIC.
+    Inject a fake Ethernet frame and confirm net_recv_raw(...) returns it correctly
+    Send a fake frame and confirm TX ring state advances correctly
+    Verify descriptors get recycled
+    Verify full-ring and empty-ring behavior
+    Verify oversized packets are rejected safely
+
+10. Integration pass after Person 1 lands.
+    Replace fake notify/check functions with real virtio hooks
+    Confirm queue memory addresses are handed to the device correctly
+    Confirm used entries are observed correctly
+    Confirm TX kick and RX refill behavior works on real hardware
+
+Suggested files
+
+    kernel/virtio_net.h
+    kernel/virtio_net.cc
+
+Done condition
+
+Raw Ethernet frames can be queued for transmit
+Raw Ethernet frames can be pulled from receive buffers
+Higher layers can use your API without knowing anything about the NIC internals
+Your code still works in fake mode if hardware bring-up is not ready

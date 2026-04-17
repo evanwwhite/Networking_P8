@@ -1,0 +1,5 @@
+*** Successfully waited for child
+*** Successfully denied sibling calling waitpid
+*** Successfully denied ascendant calling waitpid
+*** Successfully denied ghost retrieval
+*** Successfully denied fabricated entity
