@@ -106,6 +106,8 @@ extern "C" void apitHandler_();
 extern "C" void spuriousHandler_();
 extern "C" void syscallHandler_();
 
+extern "C" [[noreturn]] void resume_syscall_(void *frame);
+
 static inline uint64_t rdtsc() {
   uint32_t eax, edx;
   __asm__ volatile("rdtsc" : "=a"(eax), "=d"(edx));

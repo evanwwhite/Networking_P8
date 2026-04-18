@@ -81,3 +81,10 @@ Raw Ethernet frames can be queued for transmit
 Raw Ethernet frames can be pulled from receive buffers
 Higher layers can use your API without knowing anything about the NIC internals
 Your code still works in fake mode if hardware bring-up is not ready
+
+
+
+PROGRESS SO FAR AND WHAT I HAVE DONE:
+
+- Transfered and ensured that the kernel works with p7 functionality
+

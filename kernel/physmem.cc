@@ -36,6 +36,41 @@ struct Range {
 [[gnu::section(
     ".limine_requests")]] static constexpr volatile MemMap limine_memmap{};
 
+static bool pa_in_usable_range(uint64_t pa) {
+  if (limine_memmap.response == nullptr) {
+    return false;
+  }
+
+  for (uint64_t i = 0; i < limine_memmap.response->entry_count; i++) {
+    auto const *entry = limine_memmap.response->entries[i];
+    if (entry->type != LIMINE_MEMMAP_USABLE) {
+      continue;
+    }
+    uint64_t start = entry->base;
+    uint64_t len = entry->length;
+    if (len < FRAME_SIZE) {
+      continue;
+    }
+    uint64_t end = start + len;
+    if (end < start) {
+      continue;
+    }
+    if (pa >= start && pa <= (end - FRAME_SIZE)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+constexpr uint64_t MAX_TRACKED_PPN = (256ULL * 1024 * 1024) / FRAME_SIZE;
+static uint8_t frame_state[MAX_TRACKED_PPN]{};
+// frame_state values:
+//   0 = unknown/not tracked as allocated
+//   1 = allocated (in use)
+//   2 = on freelist
+
+static bool ppn_is_tracked(uint64_t ppn) { return ppn < MAX_TRACKED_PPN; }
+
 #if 0
 static char const *memmap_type_names[] = {"Usable",
                                           "Reserved",
@@ -101,6 +136,10 @@ PPN PhysMem::alloc() {
 
   if (frame != nullptr) {
     avail = frame->next;
+    uint64_t ppn = frame->ppn().ppn();
+    if (impl::ppn_is_tracked(ppn)) {
+      impl::frame_state[ppn] = 1;
+    }
     lock.unlock();
     return frame->ppn();
   }
@@ -111,6 +150,10 @@ PPN PhysMem::alloc() {
   }
 
   PA pa{free_ranges->base};
+  uint64_t ppn = pa.pa() >> LOG_FRAME_SIZE;
+  if (impl::ppn_is_tracked(ppn)) {
+    impl::frame_state[ppn] = 1;
+  }
 
   free_ranges->base += FRAME_SIZE;
   free_ranges->length -= FRAME_SIZE;
@@ -129,9 +172,26 @@ PPN PhysMem::alloc() {
 }
 
 void PhysMem::free(PPN ppn) {
-  SAY("freeing ?\n", ppn);
-  impl::AvailFrame *frame = VA(PA(ppn));
+  if (ppn.ppn() == 0) {
+    return;
+  }
+
+  uint64_t raw_ppn = ppn.ppn();
+  uint64_t pa = PA(ppn).pa();
+  if (!impl::pa_in_usable_range(pa)) {
+    return;
+  }
+
+  // SAY("freeing ?\n", ppn);
+  impl::AvailFrame *frame = VA(PA(pa));
   lock.lock();
+  if (impl::ppn_is_tracked(raw_ppn)) {
+    if (impl::frame_state[raw_ppn] != 1) {
+      lock.unlock();
+      return;
+    }
+    impl::frame_state[raw_ppn] = 2;
+  }
   frame->next = avail;
   avail = frame;
   lock.unlock();

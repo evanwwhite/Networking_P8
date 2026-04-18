@@ -279,7 +279,7 @@ apitHandler_:
 
 	mov %rsp, %rdi
 	call apitHandler
-
+	
 	pop %r15
 	pop %r14
 	pop %r13
@@ -329,6 +329,8 @@ bounce_to_yield_:
 
 	pop %rbp
 
+	movq $0, %fs:24
+
 	retq 
 
 
@@ -348,40 +350,24 @@ switch_to_user:
 	//     we trust the user stack
 
 	.extern syscallHandler
-	.global syscallHandler_
-syscallHandler_:
-    // save caller state
+	// PerCore layout:
+	//   0  lapic_id
+	//   8  idle_thread
+	//   16 saved_fsbase
+	//   24 saved_rsp
+	//   32 current_thread
+	//   40 tss._0
+	//   44 tss.rsp0
+	//   52 tss.rsp1
+	//   60 tss.rsp2
+	.equ PERCORE_TSS_RSP0, 44
+	.equ PERCORE_TSS_RSP1, 52
+	.equ PERCORE_TSS_RSP2, 60
 
-	swapgs              // kernel GSBASE
-
-	xchg %rsp, %gs:24   // kernel %rsp
-
-	push %r15
-
-    rdfsbase %r15
-	xchg %r15, %gs:16   // kernel FSBASE
-	wrfsbase %r15
-
-
-	push %r14
-	push %r13
-	push %r12
-	push %r11
-	push %r10
-	push %r9
-	push %r8
-	push %rbp
-	push %rdi
-	push %rsi
-	push %rdx
-	push %rcx
-	push %rbx
-	push %rax
-
-	mov %rsp, %rdi
-	call syscallHandler
-	
-	add $8, %rsp // pop %rax
+	.global resume_syscall_
+resume_syscall_:
+	mov %rdi, %rsp
+	pop %rax
 	pop %rbx
 	pop %rcx
 	pop %rdx
@@ -395,22 +381,43 @@ syscallHandler_:
 	pop %r12
 	pop %r13
 	pop %r14
-
-	rdfsbase %r15
-	xchg %r15, %gs:16 // back to user FSBASE
-	wrfsbase %r15
-	
 	pop %r15
+	mov (%rsp), %rsp
+	sysretq
 
-	xchg %rsp, %gs:24 // back to user %rsp
+	.global syscallHandler_
+syscallHandler_:
+	// Save the user stack pointer in per-core scratch space, then switch to the
+	// current kernel stack before touching memory.
+	mov %rax, %gs:PERCORE_TSS_RSP2
+	mov %rsp, %gs:PERCORE_TSS_RSP1
+	mov %gs:PERCORE_TSS_RSP0, %rsp
 
-	swapgs            // back to user GSBASE
+	// save caller state
+	mov %gs:PERCORE_TSS_RSP1, %rax
+	push %rax
+	push %r15
+	push %r14
+	push %r13
+	push %r12
+	push %r11
+	push %r10
+	push %r9
+	push %r8
+	push %rbp
+	push %rdi
+	push %rsi
+	push %rdx
+	push %rcx
+	push %rbx
+	mov %gs:PERCORE_TSS_RSP2, %rax
+	push %rax
 
-    sysretq
+	mov %rsp, %rdi
+	call syscallHandler
+	mov %rax, (%rsp)
+	mov %rsp, %rdi
+	jmp resume_syscall_
 	
 
 	.section .note.GNU-stack,"",@progbits
-	
-
-
-
