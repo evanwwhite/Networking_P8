@@ -1,0 +1,5 @@
+*** first fd returned correctly as 3
+*** second fd returned correctly as 4
+*** third fd returned correctly as -1
+*** successfully closed first file
+*** successfully reused fd number 3

@@ -1,0 +1,10 @@
+*** Testing if open is working
+*** open: OK 
+*** Testing if read is working
+*** read: OK (n=13) buf="CS439 is fun!"
+*** Testing if read is moving the offset
+*** read: OK (n=13) buf="CS439 is sad!"
+*** Testing if read is close is working
+*** close: OK
+*** Testing if read after close is invalid
+*** read after close: OK (correctly failed with n=-1)

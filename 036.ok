@@ -1,0 +1,5 @@
+*** payload: write(fd=1) basic path
+*** PASS line 50: write(fd=1) returns full length
+*** PASS line 55: write(len=0) returns 0
+*** PASS line 61: write(kernel pointer) rejected
+*** PASS summary: all write() validation checks passed

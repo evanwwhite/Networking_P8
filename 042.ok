@@ -1,0 +1,18 @@
+*** write: hello from init
+*** child: I am the child
+*** child read: Watchmen
+The Sandman
+Saga
+Maus
+V for Vendetta
+Batman: Year One
+Akira
+Invincible
+*** parent: forked child
+*** parent: child exited with 42
+*** yield: ok
+*** brk: got current break
+*** brk: heap works
+*** lseek: first5=Watch
+*** lseek: again=Watch
+*** done

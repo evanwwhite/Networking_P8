@@ -1,0 +1,7 @@
+*** parent start
+*** child A
+*** grandchild
+*** child B got grandchild status 30
+*** parent got child A status 10
+*** parent got child B status 20
+*** parent done

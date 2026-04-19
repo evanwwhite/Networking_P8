@@ -1,0 +1,5 @@
+*** before fork occurs x=5
+*** parent childpid worked
+*** child x=10
+*** parent after waitpid x=5
+*** finished status worked

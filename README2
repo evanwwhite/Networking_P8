@@ -1,0 +1,178 @@
+1. Define the interface first.
+
+Create protocol-facing files such as:
+
+kernel/ethernet.h
+kernel/arp.h
+kernel/ipv4.h
+kernel/icmp.h
+kernel/ipv4_icmp.cc or kernel/net_proto.cc
+
+Add a small public entry point such as:
+
+void net_handle_frame(const uint8_t* data, size_t len);
+bool net_send_arp_reply(...);
+bool net_send_icmp_echo_reply(...);
+
+Depend only on Person 2’s raw API:
+
+net_send_raw(...)
+net_recv_raw(...)
+
+Keep your layer independent of descriptors, rings, PCI, and MMIO. Your report already defines Person 3 as the protocol/ping layer on top of raw frames.
+
+2. Define the core packet structures.
+
+Add minimal packed structs for:
+
+Ethernet header
+ARP packet
+IPv4 header
+ICMP echo header
+
+Add constants for:
+
+EtherType values
+ARP opcodes
+IPv4 protocol values
+ICMP echo request/reply types
+header sizes
+MTU or max frame assumptions if needed
+
+Only include the fields needed for the ping demo. Do not design a full general-purpose stack.
+
+3. Build the parsing/dispatch layer.
+
+Implement a central parser:
+
+check frame length
+parse Ethernet header
+dispatch by EtherType
+reject unsupported or malformed frames safely
+
+Then split into handlers such as:
+
+handle_arp(...)
+handle_ipv4(...)
+handle_icmp(...)
+
+Add safety checks for:
+
+truncated frames
+unsupported EtherTypes
+bad IPv4 header length
+bad protocol values
+4. Build a fake/demo path so you can work before full integration.
+
+Add a fake or direct test path where:
+
+raw test frames can be passed into net_handle_frame(...)
+ARP request bytes can be injected manually
+ICMP echo request bytes can be injected manually
+generated replies can be dumped or inspected without real hardware
+
+This lets you validate protocol logic even if Person 1 and Person 2 are still finishing bring-up.
+
+5. Implement ARP first.
+
+Implement the minimum ARP support needed for ping:
+
+parse incoming ARP requests
+check whether the target IP matches your OS IP
+construct a valid ARP reply
+send the reply through net_send_raw(...)
+
+Also decide:
+
+whether to ignore unsupported ARP cases
+whether you need a tiny ARP table or only immediate request/reply support
+
+Keep it minimal.
+
+6. Implement IPv4 + ICMP ping logic.
+
+Implement the minimum needed for echo handling:
+
+parse IPv4 header
+verify destination IP
+verify protocol is ICMP
+parse ICMP echo request
+construct ICMP echo reply
+swap source/destination addresses
+recompute checksums
+send through net_send_raw(...)
+
+Preserve the important request fields correctly:
+
+ICMP identifier
+sequence number
+payload
+7. Agree on the contract with Person 2.
+
+Person 2 should provide only the raw packet API:
+
+net_send_raw(...)
+net_recv_raw(...) or equivalent receive hook
+net_ready()
+
+You should not know anything about:
+
+virtqueues
+descriptors
+queue indices
+MMIO registers
+PCI enumeration
+
+Decide early:
+
+what net_recv_raw(...) returns when no packet is available
+who owns the receive loop
+whether your code is polling-based or callback-based
+8. Agree on the contract with Person 1.
+
+Person 1 should expose only minimal device/config information needed by your layer, such as:
+
+local MAC address
+whether NIC/network stack is ready
+possibly the configured guest IP for the demo
+
+Do not depend on bring-up details. Your code should only need final network identity values, not hardware initialization steps.
+
+9. Add debug output early.
+
+Log protocol-level events such as:
+
+received EtherType
+ARP request/reply seen
+IPv4 packet received
+ICMP echo request received
+ICMP echo reply sent
+dropped malformed frame
+packet lengths
+optional header dumps
+
+Keep logs easy to disable so demo output stays clean.
+
+10. Test without the real NIC.
+
+Test these cases first:
+
+inject fake ARP request, confirm ARP reply is produced
+inject fake ICMP echo request, confirm echo reply is produced
+verify malformed/truncated frames are rejected safely
+verify wrong destination IP is ignored
+verify checksums are computed correctly
+verify payload survives request → reply path
+
+This should work before full hardware integration.
+
+11. Integration pass after Person 1 and Person 2 land.
+
+Once the lower layers are ready:
+
+connect your parser to the real receive path
+use the real MAC/IP configuration
+confirm ARP resolution happens in the live environment
+confirm ICMP echo request is parsed correctly from real incoming frames
+confirm echo reply reaches the sender
+verify the final ping demo end-to-end

@@ -1,0 +1,4 @@
+*** warmup write on normal stack
+*** survived write on current-page edge stack
+*** canary survived current-page edge-stack syscall
+*** returned from current-page edge-stack helper

@@ -1,0 +1,5 @@
+*** damian: start elf bss test
+*** damian: initialized data ok
+*** damian: bss zeroed ok
+*** damian: bss writable ok
+*** damian: done

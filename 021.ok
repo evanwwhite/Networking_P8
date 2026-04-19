@@ -1,0 +1,5 @@
+*** hello from user
+*** write: ok
+*** brk: ok
+*** zero write: ok
+*** attack: rejected

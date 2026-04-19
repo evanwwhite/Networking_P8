@@ -1,0 +1,7 @@
+=== File I/O Test ===
+open: ok
+first read: hello from the filesystem!
+lseek: ok
+second read: hello from the filesystem!
+close: ok
+=== PASSED ===
