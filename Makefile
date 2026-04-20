@@ -215,6 +215,9 @@ ${TEST_RAWS} : %.raw : Makefile %
 BLOCK_SIZE = 4096
 
 ${TEST_DATA} : %.data : Makefile
+	@if test -f ${TESTS_DIR}/$*.dir/Makefile; then \
+		$(MAKE) -C ${TESTS_DIR}/$*.dir; \
+	fi
 	@rm -f $*.data
 	mkfs.ext2 -q -b ${BLOCK_SIZE} -i ${BLOCK_SIZE} -d ${TESTS_DIR}/$*.dir  -I 128 -r 0 -t ext2 $*.data 10m
 
@@ -299,4 +302,3 @@ format:
 
 -include ${shell find build -name '*.d' 2> /dev/null}
 -include *.d
-

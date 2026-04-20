@@ -130,6 +130,8 @@ PhysMem::PhysMem() {
 }
 
 PPN PhysMem::alloc() {
+  PPN result{0};
+
   lock.lock();
 
   auto frame = avail;
@@ -140,35 +142,36 @@ PPN PhysMem::alloc() {
     if (impl::ppn_is_tracked(ppn)) {
       impl::frame_state[ppn] = 1;
     }
-    lock.unlock();
-    return frame->ppn();
-  }
+    result = frame->ppn();
+  } else {
+    if (free_ranges == nullptr) {
+      lock.unlock();
+      KPANIC("?\n", "out of frames");
+    }
 
-  if (free_ranges == nullptr) {
-    lock.unlock();
-    KPANIC("?\n", "out of frames");
-  }
+    PA pa{free_ranges->base};
+    uint64_t ppn = pa.pa() >> LOG_FRAME_SIZE;
+    if (impl::ppn_is_tracked(ppn)) {
+      impl::frame_state[ppn] = 1;
+    }
 
-  PA pa{free_ranges->base};
-  uint64_t ppn = pa.pa() >> LOG_FRAME_SIZE;
-  if (impl::ppn_is_tracked(ppn)) {
-    impl::frame_state[ppn] = 1;
-  }
+    free_ranges->base += FRAME_SIZE;
+    free_ranges->length -= FRAME_SIZE;
+    if (free_ranges->length == 0) {
+      free_ranges = free_ranges->next;
+    }
 
-  free_ranges->base += FRAME_SIZE;
-  free_ranges->length -= FRAME_SIZE;
-  if (free_ranges->length == 0) {
-    free_ranges = free_ranges->next;
+    result = PPN{pa};
   }
 
   lock.unlock();
 
-  uint64_t *const ptr = VA(pa);
+  uint64_t *const ptr = VA(result);
 
   for (uint64_t i = 0; i < FRAME_SIZE / sizeof(uint64_t); i++) {
     ptr[i] = 0;
   }
-  return PPN{pa};
+  return result;
 }
 
 void PhysMem::free(PPN ppn) {

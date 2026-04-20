@@ -11,6 +11,7 @@
 
 extern uint64_t __tls_start__;
 extern uint64_t __tls_end__;
+extern "C" void syscall_process_stopped();
 
 extern "C" [[gnu::force_align_arg_pointer]]
 void impl_bounce_to_yield() {
@@ -196,6 +197,7 @@ void Thread::sleep(uint64_t ms) {
   using namespace impl;
 
   VMM::fini_thread();
+  syscall_process_stopped();
 
   auto me = TCB::current();
   ASSERT(me != nullptr);

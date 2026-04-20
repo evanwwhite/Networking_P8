@@ -95,6 +95,7 @@ struct Process {
   Process *next_sibling = nullptr;
   bool waited = false;
   Future<int> exit_status{};
+  Future<bool> stopped{};
   uint64_t brk_min = 0;
   uint64_t brk_current = 0;
   OpenFile fds[MAX_FDS]{};
@@ -347,6 +348,12 @@ int semaphore_op(KernelSemaphore *sem, short op) {
 
 } // namespace
 
+extern "C" void syscall_process_stopped() {
+  if (current_process != nullptr) {
+    current_process->stopped.set(true);
+  }
+}
+
 extern "C" [[gnu::force_align_arg_pointer]] uint64_t
 syscallHandler(SyscallFrame *frame) {
   // Make sure the CPU knows which kernel stack to use before we eventually
@@ -569,9 +576,7 @@ syscallHandler(SyscallFrame *frame) {
       sti();
     }
     int value = child->exit_status.get();
-    if (is_disabled()) {
-      sti();
-    }
+    child->stopped.get();
     if (status != nullptr) {
       *status = value;
     }

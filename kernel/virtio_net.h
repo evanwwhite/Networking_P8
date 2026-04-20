@@ -2,12 +2,14 @@
 
 #include <cstdint>
 
+// Fixed queue size for the simplified virtio TX/RX rings.
 constexpr size_t VIRTIO_NET_QUEUE_SIZE = 8;
 constexpr size_t VIRTIO_NET_MAX_FRAME_SIZE = 2048;
 
 constexpr uint16_t VIRTQ_DESC_F_NEXT = 1U;
 constexpr uint16_t VIRTQ_DESC_F_WRITE = 2U;
 
+// One buffer descriptor shared with the device.
 struct [[gnu::packed]] VirtioNetDescriptor {
   uint64_t addr;
   uint32_t len;
@@ -32,6 +34,7 @@ struct [[gnu::packed]] VirtioNetUsedRing {
   VirtioNetUsedElem ring[VIRTIO_NET_QUEUE_SIZE];
 };
 
+// Raw frame send/receive entry points used by the rest of the kernel.
 bool net_send_raw(const uint8_t *data, size_t len);
 int net_recv_raw(uint8_t *out, size_t max_len);
 bool net_ready();

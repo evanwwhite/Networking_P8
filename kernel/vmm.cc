@@ -144,6 +144,26 @@ VME *find_vme(VME *head, uint64_t va) {
     return nullptr;
 }
 
+VME *clone_vme_list(VME *head) {
+    VME *copy_head = nullptr;
+    VME **tail = &copy_head;
+
+    while (head != nullptr) {
+        auto *copy = new VME();
+        copy->start = head->start;
+        copy->end = head->end;
+        copy->node = head->node;
+        copy->offset = head->offset;
+        copy->shared = head->shared;
+        copy->next = nullptr;
+        *tail = copy;
+        tail = &copy->next;
+        head = head->next;
+    }
+
+    return copy_head;
+}
+
 // check that [start, start+length) fits within [0, limit) without overflow
 bool fits_in_range(uint64_t start, uint64_t length, uint64_t limit) {
     return start < limit && length <= (limit - start);
@@ -517,6 +537,12 @@ static void clone_user_pages(PPN table_ppn, uint32_t level, uint64_t base_vpn) {
 }
 
 void VMM::fork_from(uint64_t source_cr3) {
+    // New kernel threads inherit the parent's live TLS image, which means the
+    // child starts out pointing at the parent's private VME list. Duplicate it
+    // here so the child can tear down its address space without freeing the
+    // parent's VM metadata.
+    impl::vmes = impl::clone_vme_list(impl::vmes);
+
     uint64_t *root = VA(PPN(source_cr3 >> 12));
     for (uint64_t i = 0; i < 256; i++) {
         uint64_t entry = root[i];
