@@ -1,2 +1,0 @@
-Tests three syscalls: open, close, and exit. Tests that open works and returns the lowest possible available fd. Also makes sure that an invalid open returns -1. Tests that close returns 0 when a fd is successfully closed and that when the file is closed its
-fd is returned for reuse by open

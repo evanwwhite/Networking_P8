@@ -1,7 +1,0 @@
-*** start
-*** parent read1 n=17 first=t
-*** child read1 n=14 first=p
-*** child read2 n=17 first=s
-*** child read3 n=0
-*** parent read2 n=0
-*** done

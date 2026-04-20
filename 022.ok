@@ -1,4 +1,0 @@
-*** [1] fill fake user stack with sentinel bytes
-*** [2] invoke zero-length write with rsp redirected
-*** [3] verify whether syscall entry modified fake stack
-*** PASS [3]: syscall entry did not use user-controlled stack

@@ -1,1 +1,0 @@
-this testcase checks whether the read works correctly and on forking actually creates a copy and writing the correct offests 

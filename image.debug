@@ -1,0 +1,18 @@
+0+0 records in
+0+0 records out
+0 bytes copied, 0.000314222 s, 0.0 kB/s
+Creating new GPT entries in memory.
+Warning: The kernel is still using the old partition table.
+The new table will be used at the next reboot or after you
+run partprobe(8) or kpartx(8)
+GPT data structures destroyed! You may now partition the disk using fdisk or
+other utilities.
+Physical block size of 512 bytes.
+No active partition found, some systems may not boot.
+Setting partition 1 as active to work around the issue...
+Installing to MBR.
+Stage 2 to be located at byte offset 0x200.
+Reminder: Remember to copy the limine-bios.sys file in either
+          the root, /boot, /limine, or /boot/limine directories of
+          one of the partitions on the device, or boot will fail!
+Limine BIOS stages installed successfully.

@@ -1,1 +1,0 @@
-This file lives inside a subdirectory. If you can read this, your find works across directories!

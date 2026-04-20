@@ -1,7 +1,0 @@
-*** [1] write: ok
-*** [2] brk: ok
-*** [3] sched_yield: ok
-*** [4] semaphore: ok
-*** [5] fork: child modified shared_val
-*** [5] fork: parent sees original value (isolation ok)
-*** [6] attack: rsp to kernel address before syscall

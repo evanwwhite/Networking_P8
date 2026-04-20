@@ -31,11 +31,7 @@ struct SyscallFrame {
   uint64_t r13;
   uint64_t r14;
   uint64_t r15;
-  uint64_t rip;
-  uint64_t cs;
-  uint64_t rflags;
-  uint64_t rsp;
-  uint64_t ss;
+  uint64_t user_rsp;
 };
 
 extern "C" uint64_t syscallHandler(SyscallFrame *frame);

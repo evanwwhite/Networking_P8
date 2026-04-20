@@ -1,8 +1,0 @@
-This test case is meant to test that programs that error,
-do not break the entire OS
-
-All this does is create a child process, make the parent wait
-while all the child does is stack overflow. 
-
-Since the overflow will cause a pageFault, we must do something
-other than KPANIC (which shuts the system down)

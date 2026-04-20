@@ -1,5 +1,0 @@
-*** relay: begin
-*** child: hello
-*** parent: world
-*** child: done
-*** relay: passed

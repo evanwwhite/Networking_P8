@@ -37,3 +37,15 @@ write:
 	syscall
 	ret
 
+  .global fork
+fork:
+  mov $57, %rax
+  syscall
+  ret
+
+  .global waitpid
+waitpid:
+  mov $61, %rax
+  syscall
+  ret
+

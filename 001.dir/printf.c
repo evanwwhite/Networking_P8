@@ -686,3 +686,13 @@ int printf (const char *fmt,...)
   return n;
 }
 
+
+int puts(const char* s) {
+    // Loop through the string and print character by character
+    // This uses putchar, which maps directly to the 'write' syscall!
+    while (*s) {
+        putchar(*s++);
+    }
+    putchar('\n'); // Add the newline that puts() is supposed to add
+    return 0;
+}
