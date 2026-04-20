@@ -64,12 +64,16 @@ QEMU_CONFIG_FLAGS = -accel ${QEMU_ACCEL} \
 
 QEMU_FLAGS = -no-reboot \
 	     ${QEMU_CONFIG_FLAGS} \
-	     -nographic\
+	     -nographic \
 	     --monitor none \
 	     --serial file:$*.raw \
 	     -drive file=build/$*.img,index=0,media=disk,format=raw,file.locking=off \
-             -drive file=$*.data,index=3,media=disk,format=raw,file.locking=off \
+	     -drive file=$*.data,index=3,media=disk,format=raw,file.locking=off \
+	     -device virtio-net-pci,disable-legacy=on,mac=52:54:00:12:34:56 \
 	     -device isa-debug-exit,iobase=0xf4,iosize=0x04
+
+
+
 
 TIME = $(shell which time)
 
