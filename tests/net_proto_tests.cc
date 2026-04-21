@@ -95,6 +95,18 @@ void build_arp_request(uint8_t *frame, const uint8_t dst_mac[6],
   copy_bytes(arp->tpa, target_ip, 4);
 }
 
+void build_unknown_ethertype_frame(uint8_t *frame, const uint8_t dst_mac[6]) {
+  auto *eth = reinterpret_cast<EthernetHeader *>(frame);
+
+  copy_bytes(eth->dst, dst_mac, 6);
+  copy_bytes(eth->src, kPeerMac, 6);
+  eth->ether_type = be16(0x1234);
+
+  for (size_t i = sizeof(EthernetHeader); i < sizeof(EthernetHeader) + 8; ++i) {
+    frame[i] = uint8_t(i);
+  }
+}
+
 void build_icmp_echo_request(uint8_t *frame, size_t payload_len) {
   auto *eth = reinterpret_cast<EthernetHeader *>(frame);
   auto *ip = reinterpret_cast<Ipv4Header *>(frame + sizeof(EthernetHeader));
@@ -222,6 +234,21 @@ bool test_arp_request_for_other_ip_sends_nothing() {
   return expect(g_send_count == 0, "ARP request for another IP should not send");
 }
 
+bool test_arp_reply_input_sends_nothing() {
+  reset_send_capture();
+
+  uint8_t broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+  uint8_t frame[sizeof(EthernetHeader) + sizeof(ArpPacket)] = {};
+  build_arp_request(frame, broadcast, kMyIp);
+
+  auto *arp = reinterpret_cast<ArpPacket *>(frame + sizeof(EthernetHeader));
+  arp->oper = be16(ARP_OP_REPLY);
+
+  net_handle_frame(frame, sizeof(frame));
+
+  return expect(g_send_count == 0, "ARP reply input should not send");
+}
+
 bool test_frame_for_other_mac_sends_nothing() {
   reset_send_capture();
 
@@ -231,6 +258,30 @@ bool test_frame_for_other_mac_sends_nothing() {
   net_handle_frame(frame, sizeof(frame));
 
   return expect(g_send_count == 0, "frame for another MAC should not send");
+}
+
+bool test_unknown_ethertype_sends_nothing() {
+  reset_send_capture();
+
+  uint8_t frame[sizeof(EthernetHeader) + 8] = {};
+  build_unknown_ethertype_frame(frame, kMyMac);
+
+  net_handle_frame(frame, sizeof(frame));
+
+  return expect(g_send_count == 0, "unknown EtherType should not send");
+}
+
+bool test_truncated_arp_frame_sends_nothing() {
+  reset_send_capture();
+
+  uint8_t broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+  uint8_t frame[sizeof(EthernetHeader) + sizeof(ArpPacket)] = {};
+  build_arp_request(frame, broadcast, kMyIp);
+
+  constexpr size_t truncated_len = sizeof(EthernetHeader) + sizeof(ArpPacket) - 1;
+  net_handle_frame(frame, truncated_len);
+
+  return expect(g_send_count == 0, "truncated ARP frame should not send");
 }
 
 bool test_icmp_echo_request_for_my_ip_sends_reply() {
@@ -272,6 +323,14 @@ bool test_icmp_echo_request_for_my_ip_sends_reply() {
     return false;
   }
   if (!expect(icmp->type == ICMP_ECHO_REPLY, "reply ICMP type should be echo reply")) {
+    return false;
+  }
+  if (!expect(icmp->identifier == be16(0x4444),
+              "reply ICMP identifier should match request")) {
+    return false;
+  }
+  if (!expect(icmp->sequence == be16(7),
+              "reply ICMP sequence should match request")) {
     return false;
   }
   if (!expect_bytes(payload, input_payload, payload_len, "reply ICMP payload should match request")) {
@@ -387,8 +446,20 @@ int main() {
                 test_arp_request_for_other_ip_sends_nothing)) {
     ++failed;
   }
+  if (!run_test("ARP reply input sends nothing",
+                test_arp_reply_input_sends_nothing)) {
+    ++failed;
+  }
   if (!run_test("Ethernet frame for other MAC sends nothing",
                 test_frame_for_other_mac_sends_nothing)) {
+    ++failed;
+  }
+  if (!run_test("Unknown EtherType sends nothing",
+                test_unknown_ethertype_sends_nothing)) {
+    ++failed;
+  }
+  if (!run_test("Truncated ARP frame sends nothing",
+                test_truncated_arp_frame_sends_nothing)) {
     ++failed;
   }
   if (!run_test("ICMP echo request for my IP sends reply",
