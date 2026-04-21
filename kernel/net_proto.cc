@@ -12,7 +12,7 @@ static uint16_t bswap16(uint16_t x) {
     return uint16_t((x >> 8) | (x << 8));
 }
 
-extern bool net_send_raw(const uint8_t* data, size_t len);
+extern bool net_send_raw(const uint8_t* data, std::size_t len);
 
 // Temporary identity for our OS on the network.
 // Later this should probably come from Person 1 / dev ice setup.
@@ -30,8 +30,8 @@ static bool ip_equals(const uint8_t a[4], const uint8_t b[4]) {
 
 // Copy raw bytes from src into dst.
 // Read this as: copy_bytes(to, from, how_many).
-static void copy_bytes(uint8_t* dst, const uint8_t* src, size_t n) {
-    for (size_t i = 0; i < n; i++) {
+static void copy_bytes(uint8_t* dst, const uint8_t* src, std::size_t n) {
+    for (std::size_t i = 0; i < n; i++) {
         dst[i] = src[i];
     }
 }
@@ -62,11 +62,11 @@ static bool mac_is_for_me(const uint8_t mac[6]) {
 // IPv4 headers use this.
 // ICMP messages also use this.
 // Main idea: after building/modifying a packet, recompute checksum so it is valid.
-static uint16_t checksum16(const uint8_t* data, size_t len) {
+static uint16_t checksum16(const uint8_t* data, std::size_t len) {
     uint32_t sum = 0;
 
     // Add 16-bit words
-    for (size_t i = 0; i + 1 < len; i += 2) {
+    for (std::size_t i = 0; i + 1 < len; i += 2) {
         uint16_t word = (uint16_t(data[i]) << 8) | uint16_t(data[i + 1]);
         sum += word;
     }
@@ -88,8 +88,8 @@ static uint16_t checksum16(const uint8_t* data, size_t len) {
 // The IPv4 header is not always exactly 20 bytes.
 // The low 4 bits of version_ihl tell us the header length in 32-bit words.
 // Multiply by 4 to get bytes.
-static size_t ipv4_header_length(const Ipv4Header* ip) {
-    return size_t(ip->version_ihl & 0x0F) * 4;
+static std::size_t ipv4_header_length(const Ipv4Header* ip) {
+    return std::size_t(ip->version_ihl & 0x0F) * 4;
 }
 
 // Check whether this IPv4 packet is addressed to our OS.
@@ -148,21 +148,21 @@ static void copy_icmp_echo_reply(IcmpEchoHeader* dst, const IcmpEchoHeader* src)
 
 // Copy the ping payload unchanged.
 // Ping replies usually send back the same extra data they received.
-static void copy_payload(uint8_t* dst, const uint8_t* src, size_t len) {
+static void copy_payload(uint8_t* dst, const uint8_t* src, std::size_t len) {
     copy_bytes(dst, src, len);
 }
 
 // Compute where the ICMP message starts inside the frame.
 // Layout is:
 // [ Ethernet header ][ IPv4 header ][ ICMP header ][ payload ]
-static size_t icmp_offset(const Ipv4Header* ip) {
+static std::size_t icmp_offset(const Ipv4Header* ip) {
     return sizeof(EthernetHeader) + ipv4_header_length(ip);
 }
 
 // Handle ARP packets.
 // ARP asks: "Who has this IP address?"
 // If the question is asking for our IP, we send back our MAC address.
-static void handle_arp(const uint8_t* data, size_t len) {
+static void handle_arp(const uint8_t* data, std::size_t len) {
     if (len < sizeof(EthernetHeader) + sizeof(ArpPacket)) return;
 
     auto eth = reinterpret_cast<const EthernetHeader*>(data);
@@ -205,7 +205,7 @@ static void handle_arp(const uint8_t* data, size_t len) {
 
 // Handle IPv4 packets.
 // For this project, we only care about ICMP ping requests.
-static void handle_ipv4(const uint8_t* data, size_t len) {
+static void handle_ipv4(const uint8_t* data, std::size_t len) {
     if (len < sizeof(EthernetHeader) + sizeof(Ipv4Header)) return;
 
     auto eth = reinterpret_cast<const EthernetHeader*>(data);
@@ -218,32 +218,32 @@ static void handle_ipv4(const uint8_t* data, size_t len) {
     if (ip->protocol != IPV4_PROTO_ICMP) return;
 
     // Find real IPv4 header size
-    size_t ip_hdr_len = ipv4_header_length(ip);
+    std::size_t ip_hdr_len = ipv4_header_length(ip);
     if (ip_hdr_len < sizeof(Ipv4Header)) return;
 
     // Need enough bytes for Ethernet + IPv4 + ICMP header
     if (len < sizeof(EthernetHeader) + ip_hdr_len + sizeof(IcmpEchoHeader)) return;
 
-    size_t icmp_off = icmp_offset(ip);
+    std::size_t icmp_off = icmp_offset(ip);
     auto icmp = reinterpret_cast<const IcmpEchoHeader*>(data + icmp_off);
 
     // Only answer ping requests
     if (icmp->type != ICMP_ECHO_REQUEST) return;
 
     // total_length is the IPv4 packet size: [IPv4 header + ICMP + payload]
-    size_t ip_total_len = bswap16(ip->total_length);
+    std::size_t ip_total_len = bswap16(ip->total_length);
     if (ip_total_len < ip_hdr_len + sizeof(IcmpEchoHeader)) return;
 
     // Make sure the whole IPv4 packet is actually present in the frame
     if (sizeof(EthernetHeader) + ip_total_len > len) return;
 
-    size_t icmp_len = ip_total_len - ip_hdr_len;
-    size_t payload_len = icmp_len - sizeof(IcmpEchoHeader);
+    std::size_t icmp_len = ip_total_len - ip_hdr_len;
+    std::size_t payload_len = icmp_len - sizeof(IcmpEchoHeader);
 
     // Build reply in a temporary buffer.
     // 1514 is a normal Ethernet frame-sized buffer.
     uint8_t reply[1514] = {};
-    size_t reply_len = sizeof(EthernetHeader) + ip_hdr_len + icmp_len;
+    std::size_t reply_len = sizeof(EthernetHeader) + ip_hdr_len + icmp_len;
 
     auto out_eth  = reinterpret_cast<EthernetHeader*>(reply);
     auto out_ip   = reinterpret_cast<Ipv4Header*>(reply + sizeof(EthernetHeader));
@@ -276,7 +276,7 @@ static void handle_ipv4(const uint8_t* data, size_t len) {
 // Main entry point for the protocol layer.
 // Person 2 gives us a raw Ethernet frame here.
 // We inspect the outer Ethernet header and choose what to do.
-void net_handle_frame(const uint8_t* data, size_t len) {
+void net_handle_frame(const uint8_t* data, std::size_t len) {
     if (len < sizeof(EthernetHeader)) return;
 
     auto eth = reinterpret_cast<const EthernetHeader*>(data);

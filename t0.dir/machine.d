@@ -1,0 +1,1 @@
+machine.o: machine.S
