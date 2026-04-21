@@ -6,7 +6,9 @@
 #include "virtio_net_tests.h"
 
 void kernel_main() {
-  net_init_fake();
+  if (!virtio_net_init_pci()) {
+    net_init_fake();
+  }
 
   StrongRef<BlockIO> ide{new RamDisk("/boot/ramdisk", 0)};
   auto fs = StrongRef<Ext2>::make(ide);

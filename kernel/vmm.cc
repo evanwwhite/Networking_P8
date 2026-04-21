@@ -415,6 +415,28 @@ static inline void invlpg(uint64_t addr) {
     asm volatile("invlpg (%0)" ::"r"(addr) : "memory");
 }
 
+uintptr_t VMM::map_mmio(uint64_t pa, uint64_t length) {
+    if (length == 0) {
+        length = PAGE_SIZE;
+    }
+
+    uint64_t start = page_align_down(pa);
+    uint64_t end = page_align_up(pa + length);
+
+    for (uint64_t curr = start; curr < end; curr += PAGE_SIZE) {
+        VA va{PA(curr)};
+        PPN ppn{PA(curr)};
+
+        impl::map_in_root(impl::common_cr3, va.vpn(), ppn, false, true);
+        if (get_cr3() != impl::common_cr3) {
+            impl::map_in_root(get_cr3(), va.vpn(), ppn, false, true);
+        }
+        invlpg(va.va());
+    }
+
+    return VA(PA(pa)).va();
+}
+
 // unmap and free every page that was faulted in for this VME.
 // called during thread teardown
 static void free_mapped_frames(impl::VME *vme) {

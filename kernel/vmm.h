@@ -65,6 +65,10 @@ extern void fini_thread();
 bool user_buffer_ok(const void *addr, size_t length);
 void fork_from(uint64_t source_cr3);
 
+// Map a physical MMIO range into the kernel half of the address space and
+// return the direct-map-style virtual address for the first byte.
+uintptr_t map_mmio(uint64_t pa, uint64_t length);
+
 uintptr_t silly_mmap(uint64_t length, StrongRef<Node> file, uint64_t offset);
 
 /* A subset of Linux mmap, read the mmap spec for details */
