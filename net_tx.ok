@@ -1,0 +1,6 @@
+*** PASS tx.send_one_valid_frame
+*** PASS tx.send_multiple_back_to_back
+*** PASS tx.send_max_frame
+*** PASS tx.reject_send_when_backend_disabled
+*** PASS tx.reclaims_after_many_sends
+*** SUMMARY failures=0

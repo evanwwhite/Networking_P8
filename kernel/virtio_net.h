@@ -44,6 +44,7 @@ void net_debug_dump_frame(const uint8_t *data, size_t len);
 void net_init_fake();
 void net_shutdown_backend();
 bool net_fake_inject_rx(const uint8_t *data, size_t len);
+bool net_copy_last_tx_for_test(uint8_t *out, size_t *len_in_out);
 
 // Real virtio-net PCI bring-up. Returns false if QEMU did not expose the NIC or
 // the device rejected our minimal feature/queue setup.

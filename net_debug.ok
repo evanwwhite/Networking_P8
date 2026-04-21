@@ -1,0 +1,6 @@
+*** PASS debug.send_large_frame
+*** PASS debug.inject_large_frame
+*** PASS debug.receive_large_frame_len
+*** PASS debug.receive_large_frame_bytes
+*** NOTE inspect raw for net: tx enqueue, net: fake tx, net: fake rx inject, net: rx dequeue, and ... 16 more bytes
+*** SUMMARY failures=0

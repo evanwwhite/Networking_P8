@@ -1,0 +1,177 @@
+c[?7l[2J[0mSeaBIOS (version rel-1.16.3-0-ga6ed6b701f0a-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+06FD0D00+06F30D00 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+
+
+iPXE (http://ipxe.org) 00:03.0 CB00 PCI2.10 PnP PMM+06F1FD00 06F30D00 CB00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from Hard Disk...
+c[?7l[2Jc[?7l[2JCPUID: AuthenticAMD
+max leaf: 0000000d
+Features:
+|     hasSSE4_2
+|     hasXSAVE
+|     hasSVM
+|     hasFSGSBASE
+|     hasRDTSCP
+CR0 0000000080010011
+  00000000 PE (Protection Enable)
+  00000004 ET (Extension Type)
+  00000010 WP (Write Protect)
+  0000001f PG (Paging)
+CR4 0000000000010622
+  00000001 PVI (Protected-Mode Virtual Interrupts)
+  00000005 PAE (Physical Address Extension)
+  00000009 OSFXSR (Operating System Support for FXSAVE and FXRSTOR instructions)
+  0000000a OSXMMEEXCPT (Operating System Support for Unmasked SIMD Floating-Point Exceptions)
+  00000010 FSGSBase (Fast Global Base Switch)
+| pitInit freq 1000Hz
+| pitInit divider 59659
+| APIT running at 1000061901Hz
+| APIT counter=1000061 for 1000Hz
+| heap init ffffffff8005b2c0 0000000000600000
+[kernel/heap.cc:init:143] | heap range ffffffff8005b2c8 ffffffff8065b2b8
+_init_array_start:ffffffff800486f8 _init_array_end:ffffffff80048748
+avaialble memory: 113827840
+    0x000000000774e000 3
+    0x0000000000100000 27719
+    0x000000000005b000 68
+Limine GDT limit: 55 base: 0xffff800000015e80
+has 4 cores, flags=00000001, bsp_lapic_id=00000000
+old efer 0000000000000d00
+old efer 0000000000000d00
+new efer 0000000000000d01
+old efer 0000000000000d00
+new efer 0000000000000d01
+new efer 0000000000000d01
+IA32_STAR  000b002800000000
+IA32_STAR  000b002800000000
+IA32_LSTAR ffffffff8002f076
+IA32_LSTAR ffffffff8002f076
+old efer 0000000000000d00
+new efer 0000000000000d01
+IA32_FMASK 0000000000000200
+IA32_STAR  000b002800000000
+IA32_LSTAR ffffffff8002f076
+IA32_FMASK 0000000000000200
+gdt[00000000] = 0000000000000000
+IA32_FMASK 0000000000000200
+gdt[00000000] = 0000000000000000
+gdt[00000001] = 0020fb0000000000
+gdt[00000002] = 0000f30000000000
+gdt[00000003] = 0020fb0000000000
+gdt[00000004] = 0000f30000000000
+gdt[00000005] = 00209b0000000000
+gdt[00000006] = 0000930000000000
+gdt[00000007] = 0000000000000000
+gdt[00000000] = 0000000000000000
+gdt[00000001] = 0020fb0000000000
+gdt[00000002] = 0000f30000000000
+gdt[00000003] = 0020fb0000000000
+gdt[00000004] = 0000f30000000000
+gdt[00000005] = 00209b0000000000
+gdt[00000006] = 0000930000000000
+gdt[00000007] = 0000000000000000
+gdt[00000001] = 0020fb0000000000
+gdt[00000002] = 0000f30000000000
+gdt[00000003] = 0020fb0000000000
+gdt[00000004] = 0000f30000000000
+gdt[00000005] = 00209b0000000000
+gdt[00000006] = 0000930000000000
+gdt[00000007] = 0000000000000000
+bootstrapping core 0000000000000001
+bootstrapping core 0000000000000000
+bootstrapping core 0000000000000003
+Local APIC Version Register 0000000000050014
+Local APIC Version Register 0000000000050014
+Local APIC Version Register 0000000000050014
+tss descriptor for 00000001 is 80808905b6480067:00000000ffffffff
+tss descriptor for 00000003 is 80808905b5180067:00000000ffffffff
+bootstrapped core 3
+IA32_STAR  000b002800000000
+IA32_LSTAR ffffffff8002f076
+IA32_FMASK 0000000000000200
+gdt[00000000] = 0000000000000000
+gdt[00000001] = 0020fb0000000000
+gdt[00000002] = 0000f30000000000
+gdt[00000003] = 0020fb0000000000
+gdt[00000004] = 0000f30000000000
+gdt[00000005] = 00209b0000000000
+gdt[00000006] = 0000930000000000
+gdt[00000007] = 80808905b7780067
+bootstrapping core 0000000000000002
+Local APIC Version Register 0000000000050014
+bootstrapped core 1
+tss descriptor for 00000002 is 80808905b8a80067:00000000ffffffff
+bootstrapped core 2
+tss descriptor for 00000000 is 80808905b7780067:00000000ffffffff
+bootstrapped core 0
+net: found virtio-net at 0:3:0
+net: mac 5254:0012:3456:??:??:??
+net: virtio-net ready queues=3 features=0000000100010020
+block size is 4096
+inode size is 128
+net: fake rx inject slot=0 ready=1 len=42
+ff ff ff ff ff ff 02 00 00 00 00 01 08 06 00 01 
+08 00 06 04 00 01 02 00 00 00 00 01 0a 00 02 02 
+52 54 00 12 34 56 0a 00 02 0f 
+*** PASS proto.arp.inject
+net: rx dequeue slot=0 used_consume=1 ready=0 len=42
+*** PASS proto.arp.recv_len
+net: tx enqueue slot=0 avail=1 pending=1 len=42
+net: fake tx len=42
+02 00 00 00 00 01 52 54 00 12 34 56 08 06 00 01 
+08 00 06 04 00 02 52 54 00 12 34 56 0a 00 02 0f 
+02 00 00 00 00 01 0a 00 02 02 
+net: tx reclaim slot=0 pending=0
+*** PASS proto.arp.reply_captured
+*** PASS proto.arp.reply_len
+*** PASS proto.arp.reply_dst
+*** PASS proto.arp.reply_src
+*** PASS proto.arp.reply_op
+*** PASS proto.arp.reply_spa
+*** PASS proto.arp.reply_tpa
+net: fake rx inject slot=0 ready=1 len=48
+52 54 00 12 34 56 02 00 00 00 00 01 08 00 45 00 
+00 22 12 34 00 00 40 01 50 97 0a 00 02 02 0a 00 
+02 0f 08 00 cb c9 44 44 00 07 a0 a1 a2 a3 a4 a5 
+*** PASS proto.icmp.inject
+net: rx dequeue slot=0 used_consume=1 ready=0 len=48
+*** PASS proto.icmp.recv_len
+net: tx enqueue slot=0 avail=1 pending=1 len=48
+net: fake tx len=48
+02 00 00 00 00 01 52 54 00 12 34 56 08 00 45 00 
+00 22 12 34 00 00 40 01 50 97 0a 00 02 0f 0a 00 
+02 02 00 00 d3 c9 44 44 00 07 a0 a1 a2 a3 a4 a5 
+net: tx reclaim slot=0 pending=0
+*** PASS proto.icmp.reply_captured
+*** PASS proto.icmp.reply_len
+*** PASS proto.icmp.reply_dst
+*** PASS proto.icmp.reply_src
+*** PASS proto.icmp.reply_ip_src
+*** PASS proto.icmp.reply_ip_dst
+*** PASS proto.icmp.reply_type
+*** PASS proto.icmp.reply_identifier
+*** PASS proto.icmp.reply_sequence
+*** PASS proto.icmp.reply_payload
+*** PASS proto.icmp.reply_ip_checksum
+*** PASS proto.icmp.reply_checksum
+*** SUMMARY failures=0
+phnum = 0006
+vaddr:0000000000400000 memsz:00000000000001c0 filesz:00000000000001c0 fileoff:0000000000000000
+vaddr:0000000000401000 memsz:0000000000000016 filesz:0000000000000016 fileoff:0000000000001000
+vaddr:0000000000402000 memsz:000000000000002c filesz:000000000000002c fileoff:0000000000002000
+@@@ max_spin_cycles        = 22211492
+@@@ critical_section_count = 19224
+@@@ avg_spin_cycles        = 3824
+@@@ total_critial_section_cycles = 73829050
+@@@ total_tsc         = 15040635608
+@@@ critical_percentage = 0
+@@@ jiffies = 65
+@@@ n_preempt = 0

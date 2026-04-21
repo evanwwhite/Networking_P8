@@ -1,5 +1,10 @@
 #include "virtio_net_tests.h"
 
+#include "arp.h"
+#include "ethernet.h"
+#include "icmp.h"
+#include "ipv4.h"
+#include "net_proto.h"
 #include "print.h"
 #include "virtio_net.h"
 
@@ -17,6 +22,7 @@ enum class NetTestCase : uint8_t {
   Rx,
   Queue,
   Debug,
+  Proto,
   RealTx,
   Unknown,
 };
@@ -27,6 +33,11 @@ struct TestFrames {
   uint8_t frame_c[VIRTIO_NET_MAX_FRAME_SIZE];
   uint8_t oversized[VIRTIO_NET_MAX_FRAME_SIZE + 1];
 };
+
+constexpr uint8_t k_proto_my_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
+constexpr uint8_t k_proto_my_ip[4] = {10, 0, 2, 15};
+constexpr uint8_t k_proto_peer_mac[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
+constexpr uint8_t k_proto_peer_ip[4] = {10, 0, 2, 2};
 
 TestFrames g_frames{};
 bool g_frames_ready = false;
@@ -57,6 +68,8 @@ void init_frames() {
 
 size_t min_size(size_t a, size_t b) { return a < b ? a : b; }
 
+uint16_t be16(uint16_t x) { return uint16_t((x >> 8) | (x << 8)); }
+
 void reset_fake_backend() {
   net_shutdown_backend();
   net_init_fake();
@@ -69,6 +82,84 @@ bool bytes_equal(const uint8_t *lhs, const uint8_t *rhs, size_t len) {
     }
   }
   return true;
+}
+
+void copy_bytes_local(uint8_t *dst, const uint8_t *src, size_t len) {
+  for (size_t i = 0; i < len; ++i) {
+    dst[i] = src[i];
+  }
+}
+
+uint16_t checksum16(const uint8_t *data, size_t len) {
+  uint32_t sum = 0;
+  for (size_t i = 0; i + 1 < len; i += 2) {
+    sum += (uint16_t(data[i]) << 8) | data[i + 1];
+  }
+  if ((len & 1U) != 0) {
+    sum += uint16_t(data[len - 1]) << 8;
+  }
+  while ((sum >> 16) != 0) {
+    sum = (sum & 0xffffU) + (sum >> 16);
+  }
+  return uint16_t(~sum);
+}
+
+void build_arp_request(uint8_t *frame) {
+  auto *eth = (EthernetHeader *)frame;
+  auto *arp = (ArpPacket *)(frame + sizeof(EthernetHeader));
+  uint8_t broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+
+  copy_bytes_local(eth->dst, broadcast, 6);
+  copy_bytes_local(eth->src, k_proto_peer_mac, 6);
+  eth->ether_type = be16(ETH_TYPE_ARP);
+
+  arp->htype = be16(ARP_HTYPE_ETHERNET);
+  arp->ptype = be16(ARP_PTYPE_IPV4);
+  arp->hlen = 6;
+  arp->plen = 4;
+  arp->oper = be16(ARP_OP_REQUEST);
+  copy_bytes_local(arp->sha, k_proto_peer_mac, 6);
+  copy_bytes_local(arp->spa, k_proto_peer_ip, 4);
+  copy_bytes_local(arp->tha, k_proto_my_mac, 6);
+  copy_bytes_local(arp->tpa, k_proto_my_ip, 4);
+}
+
+void build_icmp_echo_request(uint8_t *frame, size_t payload_len) {
+  auto *eth = (EthernetHeader *)frame;
+  auto *ip = (Ipv4Header *)(frame + sizeof(EthernetHeader));
+  auto *icmp =
+      (IcmpEchoHeader *)(frame + sizeof(EthernetHeader) + sizeof(Ipv4Header));
+  uint8_t *payload = frame + sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                     sizeof(IcmpEchoHeader);
+
+  copy_bytes_local(eth->dst, k_proto_my_mac, 6);
+  copy_bytes_local(eth->src, k_proto_peer_mac, 6);
+  eth->ether_type = be16(ETH_TYPE_IPV4);
+
+  ip->version_ihl = 0x45;
+  ip->tos = 0;
+  ip->total_length =
+      be16(uint16_t(sizeof(Ipv4Header) + sizeof(IcmpEchoHeader) + payload_len));
+  ip->identification = be16(0x1234);
+  ip->flags_fragment = 0;
+  ip->ttl = 64;
+  ip->protocol = IPV4_PROTO_ICMP;
+  ip->header_checksum = 0;
+  copy_bytes_local(ip->src_ip, k_proto_peer_ip, 4);
+  copy_bytes_local(ip->dst_ip, k_proto_my_ip, 4);
+  ip->header_checksum =
+      be16(checksum16((const uint8_t *)ip, sizeof(Ipv4Header)));
+
+  icmp->type = ICMP_ECHO_REQUEST;
+  icmp->code = 0;
+  icmp->checksum = 0;
+  icmp->identifier = be16(0x4444);
+  icmp->sequence = be16(7);
+  for (size_t i = 0; i < payload_len; ++i) {
+    payload[i] = uint8_t(0xa0 + i);
+  }
+  icmp->checksum = be16(
+      checksum16((const uint8_t *)icmp, sizeof(IcmpEchoHeader) + payload_len));
 }
 
 bool strings_equal(const char *lhs, const char *rhs) {
@@ -114,6 +205,9 @@ NetTestCase parse_test_case(const char *name) {
   }
   if (strings_equal(name, "debug")) {
     return NetTestCase::Debug;
+  }
+  if (strings_equal(name, "proto")) {
+    return NetTestCase::Proto;
   }
   if (strings_equal(name, "real_tx")) {
     return NetTestCase::RealTx;
@@ -434,6 +528,91 @@ void run_debug_tests(Reporter &reporter) {
   reset_fake_backend();
 }
 
+void run_proto_tests(Reporter &reporter) {
+  reset_fake_backend();
+
+  uint8_t frame[128]{};
+  uint8_t rx[VIRTIO_NET_MAX_FRAME_SIZE]{};
+  uint8_t tx[VIRTIO_NET_MAX_FRAME_SIZE]{};
+
+  build_arp_request(frame);
+  reporter.check("proto.arp.inject",
+                 net_fake_inject_rx(frame,
+                                    sizeof(EthernetHeader) + sizeof(ArpPacket)));
+  int recv_len = net_recv_raw(rx, sizeof(rx));
+  reporter.check_eq("proto.arp.recv_len", recv_len,
+                    int(sizeof(EthernetHeader) + sizeof(ArpPacket)));
+  if (recv_len == int(sizeof(EthernetHeader) + sizeof(ArpPacket))) {
+    net_handle_frame(rx, size_t(recv_len));
+    size_t tx_len = sizeof(tx);
+    reporter.check("proto.arp.reply_captured",
+                   net_copy_last_tx_for_test(tx, &tx_len));
+    reporter.check_eq("proto.arp.reply_len", int(tx_len),
+                      int(sizeof(EthernetHeader) + sizeof(ArpPacket)));
+    if (tx_len == sizeof(EthernetHeader) + sizeof(ArpPacket)) {
+      auto *eth = (EthernetHeader *)tx;
+      auto *arp = (ArpPacket *)(tx + sizeof(EthernetHeader));
+      reporter.check_bytes("proto.arp.reply_dst", eth->dst, k_proto_peer_mac, 6);
+      reporter.check_bytes("proto.arp.reply_src", eth->src, k_proto_my_mac, 6);
+      reporter.check("proto.arp.reply_op",
+                     be16(arp->oper) == ARP_OP_REPLY);
+      reporter.check_bytes("proto.arp.reply_spa", arp->spa, k_proto_my_ip, 4);
+      reporter.check_bytes("proto.arp.reply_tpa", arp->tpa, k_proto_peer_ip, 4);
+    }
+  }
+
+  reset_fake_backend();
+
+  constexpr size_t k_payload_len = 6;
+  build_icmp_echo_request(frame, k_payload_len);
+  size_t request_len = sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                       sizeof(IcmpEchoHeader) + k_payload_len;
+  reporter.check("proto.icmp.inject",
+                 net_fake_inject_rx(frame, request_len));
+  recv_len = net_recv_raw(rx, sizeof(rx));
+  reporter.check_eq("proto.icmp.recv_len", recv_len, int(request_len));
+  if (recv_len == int(request_len)) {
+    net_handle_frame(rx, size_t(recv_len));
+    size_t tx_len = sizeof(tx);
+    reporter.check("proto.icmp.reply_captured",
+                   net_copy_last_tx_for_test(tx, &tx_len));
+    reporter.check_eq("proto.icmp.reply_len", int(tx_len), int(request_len));
+    if (tx_len == request_len) {
+      auto *eth = (EthernetHeader *)tx;
+      auto *ip = (Ipv4Header *)(tx + sizeof(EthernetHeader));
+      auto *icmp = (IcmpEchoHeader *)(tx + sizeof(EthernetHeader) +
+                                      sizeof(Ipv4Header));
+      const uint8_t *payload = tx + sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                               sizeof(IcmpEchoHeader);
+      reporter.check_bytes("proto.icmp.reply_dst", eth->dst, k_proto_peer_mac,
+                           6);
+      reporter.check_bytes("proto.icmp.reply_src", eth->src, k_proto_my_mac, 6);
+      reporter.check_bytes("proto.icmp.reply_ip_src", ip->src_ip,
+                           k_proto_my_ip, 4);
+      reporter.check_bytes("proto.icmp.reply_ip_dst", ip->dst_ip,
+                           k_proto_peer_ip, 4);
+      reporter.check("proto.icmp.reply_type", icmp->type == ICMP_ECHO_REPLY);
+      reporter.check("proto.icmp.reply_identifier",
+                     icmp->identifier == be16(0x4444));
+      reporter.check("proto.icmp.reply_sequence",
+                     icmp->sequence == be16(7));
+      uint8_t expected_payload[k_payload_len];
+      for (size_t i = 0; i < k_payload_len; ++i) {
+        expected_payload[i] = uint8_t(0xa0 + i);
+      }
+      reporter.check_bytes("proto.icmp.reply_payload", payload,
+                           expected_payload, k_payload_len);
+      reporter.check("proto.icmp.reply_ip_checksum",
+                     checksum16((const uint8_t *)ip, sizeof(Ipv4Header)) == 0);
+      reporter.check("proto.icmp.reply_checksum",
+                     checksum16((const uint8_t *)icmp,
+                                sizeof(IcmpEchoHeader) + k_payload_len) == 0);
+    }
+  }
+
+  reset_fake_backend();
+}
+
 void run_real_tx_tests(Reporter &reporter) {
   init_frames();
 
@@ -488,6 +667,9 @@ void net_run_selected_tests(StrongRef<Ext2> fs) {
     break;
   case NetTestCase::Debug:
     run_debug_tests(reporter);
+    break;
+  case NetTestCase::Proto:
+    run_proto_tests(reporter);
     break;
   case NetTestCase::RealTx:
     run_real_tx_tests(reporter);
