@@ -135,6 +135,34 @@ void build_icmp_echo_request(uint8_t *frame, size_t payload_len) {
       reinterpret_cast<uint8_t *>(icmp), sizeof(IcmpEchoHeader) + payload_len));
 }
 
+void build_non_icmp_ipv4_packet(uint8_t *frame, size_t payload_len) {
+  auto *eth = reinterpret_cast<EthernetHeader *>(frame);
+  auto *ip = reinterpret_cast<Ipv4Header *>(frame + sizeof(EthernetHeader));
+  uint8_t *payload = frame + sizeof(EthernetHeader) + sizeof(Ipv4Header);
+
+  copy_bytes(eth->dst, kMyMac, 6);
+  copy_bytes(eth->src, kPeerMac, 6);
+  eth->ether_type = be16(ETH_TYPE_IPV4);
+
+  ip->version_ihl = 0x45;
+  ip->tos = 0;
+  ip->total_length = be16(uint16_t(sizeof(Ipv4Header) + payload_len));
+  ip->identification = be16(0x2222);
+  ip->flags_fragment = 0;
+  ip->ttl = 64;
+  ip->protocol = 17;
+  ip->header_checksum = 0;
+  copy_bytes(ip->src_ip, kPeerIp, 4);
+  copy_bytes(ip->dst_ip, kMyIp, 4);
+
+  for (size_t i = 0; i < payload_len; ++i) {
+    payload[i] = uint8_t(0x30 + i);
+  }
+
+  ip->header_checksum = be16(checksum16(reinterpret_cast<uint8_t *>(ip),
+                                        sizeof(Ipv4Header)));
+}
+
 bool test_arp_request_for_my_ip_sends_reply() {
   reset_send_capture();
 
@@ -262,6 +290,73 @@ bool test_icmp_echo_request_for_my_ip_sends_reply() {
   return true;
 }
 
+bool test_icmp_echo_request_for_other_ip_sends_nothing() {
+  reset_send_capture();
+
+  constexpr size_t payload_len = 6;
+  uint8_t frame[sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                sizeof(IcmpEchoHeader) + payload_len] = {};
+  build_icmp_echo_request(frame, payload_len);
+
+  auto *ip = reinterpret_cast<Ipv4Header *>(frame + sizeof(EthernetHeader));
+  copy_bytes(ip->dst_ip, kOtherIp, 4);
+  ip->header_checksum = 0;
+  ip->header_checksum = be16(checksum16(reinterpret_cast<uint8_t *>(ip),
+                                        sizeof(Ipv4Header)));
+
+  net_handle_frame(frame, sizeof(frame));
+
+  return expect(g_send_count == 0,
+                "ICMP echo request for another IP should not send");
+}
+
+bool test_non_icmp_ipv4_packet_sends_nothing() {
+  reset_send_capture();
+
+  constexpr size_t payload_len = 4;
+  uint8_t frame[sizeof(EthernetHeader) + sizeof(Ipv4Header) + payload_len] = {};
+  build_non_icmp_ipv4_packet(frame, payload_len);
+
+  net_handle_frame(frame, sizeof(frame));
+
+  return expect(g_send_count == 0, "non-ICMP IPv4 packet should not send");
+}
+
+bool test_icmp_echo_reply_input_sends_nothing() {
+  reset_send_capture();
+
+  constexpr size_t payload_len = 6;
+  uint8_t frame[sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                sizeof(IcmpEchoHeader) + payload_len] = {};
+  build_icmp_echo_request(frame, payload_len);
+
+  auto *icmp = reinterpret_cast<IcmpEchoHeader *>(
+      frame + sizeof(EthernetHeader) + sizeof(Ipv4Header));
+  icmp->type = ICMP_ECHO_REPLY;
+  icmp->checksum = 0;
+  icmp->checksum = be16(checksum16(reinterpret_cast<uint8_t *>(icmp),
+                                   sizeof(IcmpEchoHeader) + payload_len));
+
+  net_handle_frame(frame, sizeof(frame));
+
+  return expect(g_send_count == 0, "ICMP echo reply input should not send");
+}
+
+bool test_truncated_ipv4_icmp_frame_sends_nothing() {
+  reset_send_capture();
+
+  constexpr size_t payload_len = 6;
+  uint8_t frame[sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                sizeof(IcmpEchoHeader) + payload_len] = {};
+  build_icmp_echo_request(frame, payload_len);
+
+  constexpr size_t truncated_len =
+      sizeof(EthernetHeader) + sizeof(Ipv4Header) + sizeof(IcmpEchoHeader) - 1;
+  net_handle_frame(frame, truncated_len);
+
+  return expect(g_send_count == 0, "truncated IPv4/ICMP frame should not send");
+}
+
 bool run_test(const char *name, bool (*test)()) {
   std::printf("net_proto: %s\n", name);
   bool passed = test();
@@ -298,6 +393,22 @@ int main() {
   }
   if (!run_test("ICMP echo request for my IP sends reply",
                 test_icmp_echo_request_for_my_ip_sends_reply)) {
+    ++failed;
+  }
+  if (!run_test("ICMP echo request for other IP sends nothing",
+                test_icmp_echo_request_for_other_ip_sends_nothing)) {
+    ++failed;
+  }
+  if (!run_test("Non-ICMP IPv4 packet sends nothing",
+                test_non_icmp_ipv4_packet_sends_nothing)) {
+    ++failed;
+  }
+  if (!run_test("ICMP echo reply input sends nothing",
+                test_icmp_echo_reply_input_sends_nothing)) {
+    ++failed;
+  }
+  if (!run_test("Truncated IPv4/ICMP frame sends nothing",
+                test_truncated_ipv4_icmp_frame_sends_nothing)) {
     ++failed;
   }
 
