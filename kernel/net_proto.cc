@@ -15,7 +15,7 @@ static uint16_t bswap16(uint16_t x) {
 extern bool net_send_raw(const uint8_t* data, size_t len);
 
 // Temporary identity for our OS on the network.
-// Later this should probably come from Person 1 / device setup.
+// Later this should probably come from Person 1 / dev ice setup.
 static uint8_t g_my_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
 static uint8_t g_my_ip[4]  = {10, 0, 2, 15};
 
