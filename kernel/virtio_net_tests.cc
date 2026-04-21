@@ -17,6 +17,7 @@ enum class NetTestCase : uint8_t {
   Rx,
   Queue,
   Debug,
+  RealTx,
   Unknown,
 };
 
@@ -113,6 +114,9 @@ NetTestCase parse_test_case(const char *name) {
   }
   if (strings_equal(name, "debug")) {
     return NetTestCase::Debug;
+  }
+  if (strings_equal(name, "real_tx")) {
+    return NetTestCase::RealTx;
   }
   return NetTestCase::Unknown;
 }
@@ -430,6 +434,33 @@ void run_debug_tests(Reporter &reporter) {
   reset_fake_backend();
 }
 
+void run_real_tx_tests(Reporter &reporter) {
+  init_frames();
+
+  uint8_t out[VIRTIO_NET_MAX_FRAME_SIZE]{};
+
+  reporter.check("real.ready_after_pci_init", net_ready());
+  reporter.check("real.fake_inject_unavailable",
+                 !net_fake_inject_rx(g_frames.frame_a, sizeof(g_frames.frame_a)));
+
+  reporter.check("real.tx_one_valid_frame",
+                 net_send_raw(g_frames.frame_a, sizeof(g_frames.frame_a)));
+
+  bool multi_send_ok = true;
+  for (size_t i = 0; i < 5; ++i) {
+    const uint8_t *frame = (i % 2 == 0) ? g_frames.frame_a : g_frames.frame_b;
+    if (!net_send_raw(frame, sizeof(g_frames.frame_a))) {
+      multi_send_ok = false;
+    }
+  }
+  reporter.check("real.tx_multiple_back_to_back", multi_send_ok);
+
+  reporter.check("real.tx_max_frame",
+                 net_send_raw(g_frames.frame_c, VIRTIO_NET_MAX_FRAME_SIZE));
+  reporter.check_eq("real.rx_empty_without_host_backend",
+                    net_recv_raw(out, sizeof(out)), 0);
+}
+
 } // namespace
 
 void net_run_selected_tests(StrongRef<Ext2> fs) {
@@ -457,6 +488,9 @@ void net_run_selected_tests(StrongRef<Ext2> fs) {
     break;
   case NetTestCase::Debug:
     run_debug_tests(reporter);
+    break;
+  case NetTestCase::RealTx:
+    run_real_tx_tests(reporter);
     break;
   case NetTestCase::Unknown:
     reporter.fail("selector.unknown_test_case");
