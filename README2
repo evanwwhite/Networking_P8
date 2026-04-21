@@ -88,19 +88,13 @@ Your code still works in fake mode if hardware bring-up is not ready
 PROGRESS SO FAR AND WHAT I HAVE DONE:
 
 - Transfered and ensured that the kernel works with p7 functionality
-    (race conditions fixed)
-- Implemented a virtio_net file with interim functionality based on 
-a fake backend.
-- 
 
 
 Person 2 Test Plan
 
 Goal
 
-Prove that `kernel/virtio_net.cc` provides a stable raw-packet API, works 
-in fake mode before the real NIC exists, handles expected failures cleanly, 
-and can later connect to Person 1's backend without changing Person 3's code.
+Prove that `kernel/virtio_net.cc` provides a stable raw-packet API, works in fake mode before the real NIC exists, handles expected failures cleanly, and can later connect to Person 1's backend without changing Person 3's code.
 
 Recommended test order
 
@@ -424,36 +418,14 @@ Add temporary code before `ELF::exec(init);` that:
 3. Prints `PASS` or `FAIL` with `KPRINT(...)`
 4. Boots, inspects the `.raw` output, then removes the temporary harness after validation
 
-Remaining tasks: 
+Example tests worth implementing first
 
-Replace fake-only behavior with the real backend hookup.
-Right now TX/RX logic exists, but the real NIC boundary is only 
-nic_ready() and nic_kick_tx() in kernel/virtio_net.h (line 48) 
-and weak stubs in kernel/virtio_net.cc (line 182). Person 2 
-needs to connect the queue code to Person 1’s actual device state.
+If you only have time for a few, do these first:
 
-Make TX completion work with real used-ring updates.
-The fake backend completes TX immediately in kernel/virtio_net.cc
- (line 242). On real hardware, Person 2 will need to make sure 
- reclaim_tx_locked() sees device-written used entries correctly 
- and frees descriptors at the right time.
-
-Make RX delivery work from real NIC-written buffers.
-The current RX path is validated through net_fake_inject_rx(...) 
-in kernel/virtio_net.cc (line 307). Person 2 still needs the real 
-path where the NIC fills published RX buffers and advances the used 
-ring.
-
-Confirm RX buffer reposting/refill behavior on hardware.
-The recycle logic is already there in kernel/virtio_net.cc (line 290), 
-but it still needs to be proven against the real virtio device.
-
-Coordinate the exact queue-memory contract with Person 1.
-Person 2 owns the ring/descriptors API surface, so they need to agree 
-with Person 1 on: which addresses get handed to the NIC, when queues 
-are considered live, and when TX kicks / RX polling happen.
-
-Add or adapt tests for real-device integration.
-The current tests in kernel/virtio_net_tests.cc (line 191) are very 
-good for fake mode, but Person 2 still needs at least a small integration 
-pass once real hardware is enabled.
+1. `net_ready()` true/false lifecycle
+2. `net_send_raw(...)` valid send
+3. `net_send_raw(...)` oversized reject
+4. `net_recv_raw(...)` empty returns 0
+5. `net_fake_inject_rx(...)` plus `net_recv_raw(...)` round trip
+6. RX ring full behavior
+7. repeated TX sends to confirm reclaim
