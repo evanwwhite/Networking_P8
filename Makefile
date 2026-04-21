@@ -73,7 +73,7 @@ QEMU_FLAGS = -no-reboot \
 
 TIME = $(shell which time)
 
-.PHONY: ${TESTS} sig test tests all clean ${TEST_TARGETS} help qemu_config_flags qemu_cmd before_test 
+.PHONY: ${TESTS} sig test tests all clean net_proto_tests ${TEST_TARGETS} help qemu_config_flags qemu_cmd before_test 
 
 all : ${TESTS};
 
@@ -155,6 +155,13 @@ $(TESTS) : % : build/%.img;
 clean:
 	rm -rf *.diff *.raw *.out *.result *.failure *.time build *.debug *.cycles *.data
 	make -C limine clean
+
+net_proto_tests: build/net_proto_tests
+	./build/net_proto_tests
+
+build/net_proto_tests: tests/net_proto_tests.cc kernel/net_proto.cc kernel/net_proto.h kernel/arp.h kernel/ethernet.h kernel/icmp.h kernel/ipv4.h Makefile
+	@mkdir -p build
+	$(CXX) -std=gnu++23 -Wall -Werror -iquote kernel tests/net_proto_tests.cc kernel/net_proto.cc -o $@
 
 build/%.c.o: %.c Makefile common.flags
 	@mkdir -p "$(dir $@)"
