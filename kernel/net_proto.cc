@@ -4,6 +4,7 @@
 #include "ethernet.h"
 #include "icmp.h"
 #include "ipv4.h"
+#include "virtio_net.h"
 
 // Convert a 16-bit value between byte orders.
 // Network packets store multi-byte numbers in big-endian order.
@@ -298,4 +299,13 @@ void net_handle_frame(const uint8_t* data, std::size_t len) {
     }
 
     // Ignore anything else for now
+}
+
+bool net_poll_once() {
+    uint8_t frame[VIRTIO_NET_MAX_FRAME_SIZE] = {};
+    int recv_len = net_recv_raw(frame, sizeof(frame));
+    if (recv_len <= 0) return false;
+
+    net_handle_frame(frame, std::size_t(recv_len));
+    return true;
 }

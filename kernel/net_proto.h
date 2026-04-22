@@ -2,3 +2,4 @@
 #include <cstdint>
 
 void net_handle_frame(const uint8_t* data, std::size_t len);
+bool net_poll_once();

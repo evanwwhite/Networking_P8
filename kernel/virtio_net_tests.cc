@@ -5,7 +5,9 @@
 #include "icmp.h"
 #include "ipv4.h"
 #include "net_proto.h"
+#include "pit.h"
 #include "print.h"
+#include "thread.h"
 #include "virtio_net.h"
 
 namespace {
@@ -23,6 +25,7 @@ enum class NetTestCase : uint8_t {
   Queue,
   Debug,
   Proto,
+  Live,
   RealTx,
   Unknown,
 };
@@ -208,6 +211,9 @@ NetTestCase parse_test_case(const char *name) {
   }
   if (strings_equal(name, "proto")) {
     return NetTestCase::Proto;
+  }
+  if (strings_equal(name, "live")) {
+    return NetTestCase::Live;
   }
   if (strings_equal(name, "real_tx")) {
     return NetTestCase::RealTx;
@@ -532,18 +538,14 @@ void run_proto_tests(Reporter &reporter) {
   reset_fake_backend();
 
   uint8_t frame[128]{};
-  uint8_t rx[VIRTIO_NET_MAX_FRAME_SIZE]{};
   uint8_t tx[VIRTIO_NET_MAX_FRAME_SIZE]{};
 
   build_arp_request(frame);
   reporter.check("proto.arp.inject",
                  net_fake_inject_rx(frame,
                                     sizeof(EthernetHeader) + sizeof(ArpPacket)));
-  int recv_len = net_recv_raw(rx, sizeof(rx));
-  reporter.check_eq("proto.arp.recv_len", recv_len,
-                    int(sizeof(EthernetHeader) + sizeof(ArpPacket)));
-  if (recv_len == int(sizeof(EthernetHeader) + sizeof(ArpPacket))) {
-    net_handle_frame(rx, size_t(recv_len));
+  reporter.check("proto.arp.poll_once", net_poll_once());
+  {
     size_t tx_len = sizeof(tx);
     reporter.check("proto.arp.reply_captured",
                    net_copy_last_tx_for_test(tx, &tx_len));
@@ -569,10 +571,8 @@ void run_proto_tests(Reporter &reporter) {
                        sizeof(IcmpEchoHeader) + k_payload_len;
   reporter.check("proto.icmp.inject",
                  net_fake_inject_rx(frame, request_len));
-  recv_len = net_recv_raw(rx, sizeof(rx));
-  reporter.check_eq("proto.icmp.recv_len", recv_len, int(request_len));
-  if (recv_len == int(request_len)) {
-    net_handle_frame(rx, size_t(recv_len));
+  {
+    reporter.check("proto.icmp.poll_once", net_poll_once());
     size_t tx_len = sizeof(tx);
     reporter.check("proto.icmp.reply_captured",
                    net_copy_last_tx_for_test(tx, &tx_len));
@@ -611,6 +611,19 @@ void run_proto_tests(Reporter &reporter) {
   }
 
   reset_fake_backend();
+}
+
+void run_live_tests(Reporter &reporter) {
+  reporter.check("live.ready_after_pci_init", net_ready());
+  reporter.note("send host ARP/ping traffic to 10.0.2.15 during this window");
+  reporter.note("inspect raw for net: virtio rx dequeue and reply tx logs");
+
+  uint64_t until = Pit::jiffies + 7000;
+  while (Pit::jiffies < until) {
+    if (!net_poll_once()) {
+      Thread::yield();
+    }
+  }
 }
 
 void run_real_tx_tests(Reporter &reporter) {
@@ -670,6 +683,9 @@ void net_run_selected_tests(StrongRef<Ext2> fs) {
     break;
   case NetTestCase::Proto:
     run_proto_tests(reporter);
+    break;
+  case NetTestCase::Live:
+    run_live_tests(reporter);
     break;
   case NetTestCase::RealTx:
     run_real_tx_tests(reporter);

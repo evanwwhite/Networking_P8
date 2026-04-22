@@ -1,0 +1,4 @@
+*** PASS live.ready_after_pci_init
+*** NOTE send host ARP/ping traffic to 10.0.2.15 during this window
+*** NOTE inspect raw for net: virtio rx dequeue and reply tx logs
+*** SUMMARY failures=0

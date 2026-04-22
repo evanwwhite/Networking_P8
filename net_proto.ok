@@ -1,5 +1,5 @@
 *** PASS proto.arp.inject
-*** PASS proto.arp.recv_len
+*** PASS proto.arp.poll_once
 *** PASS proto.arp.reply_captured
 *** PASS proto.arp.reply_len
 *** PASS proto.arp.reply_dst
@@ -8,7 +8,7 @@
 *** PASS proto.arp.reply_spa
 *** PASS proto.arp.reply_tpa
 *** PASS proto.icmp.inject
-*** PASS proto.icmp.recv_len
+*** PASS proto.icmp.poll_once
 *** PASS proto.icmp.reply_captured
 *** PASS proto.icmp.reply_len
 *** PASS proto.icmp.reply_dst
