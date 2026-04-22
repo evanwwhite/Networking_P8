@@ -1,9 +1,0 @@
-*** PASS smoke.ready_fake_boot
-*** PASS smoke.ready_after_shutdown
-*** PASS smoke.ready_after_reinit
-*** PASS smoke.reject_null_tx
-*** PASS smoke.reject_zero_tx
-*** PASS smoke.reject_oversized_tx
-*** PASS smoke.reject_null_rx_buffer
-*** PASS smoke.reject_zero_rx_max
-*** SUMMARY failures=0

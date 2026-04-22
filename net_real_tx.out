@@ -1,7 +1,0 @@
-*** PASS real.ready_after_pci_init
-*** PASS real.fake_inject_unavailable
-*** PASS real.tx_one_valid_frame
-*** PASS real.tx_multiple_back_to_back
-*** PASS real.tx_max_frame
-*** PASS real.rx_empty_without_host_backend
-*** SUMMARY failures=0

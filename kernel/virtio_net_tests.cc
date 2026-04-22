@@ -19,6 +19,7 @@ constexpr size_t k_rx_stress_loops = 32;
 
 enum class NetTestCase : uint8_t {
   None,
+  Demo,
   Smoke,
   Tx,
   Rx,
@@ -194,6 +195,9 @@ void trim_selector(char *buffer) {
 }
 
 NetTestCase parse_test_case(const char *name) {
+  if (strings_equal(name, "demo")) {
+    return NetTestCase::Demo;
+  }
   if (strings_equal(name, "smoke")) {
     return NetTestCase::Smoke;
   }
@@ -287,10 +291,75 @@ struct Reporter {
     }
   }
 
+  bool quiet_check(const char *name, bool ok) {
+    if (!ok) {
+      fail(name);
+      return false;
+    }
+    return true;
+  }
+
+  bool quiet_check_eq(const char *name, int got, int want) {
+    if (got != want) {
+      fail_eq(name, got, want);
+      return false;
+    }
+    return true;
+  }
+
+  bool quiet_check_bytes(const char *name, const uint8_t *got,
+                         const uint8_t *want, size_t len) {
+    if (!bytes_equal(got, want, len)) {
+      fail_bytes(name, len);
+      return false;
+    }
+    return true;
+  }
+
   void note(const char *text) { KPRINT("*** NOTE ?\n", text); }
 
   void summary() { KPRINT("*** SUMMARY failures=?\n", Dec(failures)); }
 };
+
+void demo_hr() {
+  KPRINT("*** ============================================================\n");
+}
+
+void demo_section(const char *title) {
+  KPRINT("***\n");
+  demo_hr();
+  KPRINT("***   ?\n", title);
+  demo_hr();
+}
+
+void demo_status(const char *label, bool ok) {
+  KPRINT("***   status   : ?\n", ok ? "OK" : "FAIL");
+  if (!ok) {
+    KPRINT("***   detail   : ?\n", label);
+  }
+}
+
+void demo_mac_line(const char *label, const uint8_t mac[6]) {
+  KPRINT("***   ? : ?:?:?:?:?:?\n", label, mac[0], mac[1], mac[2], mac[3],
+         mac[4], mac[5]);
+}
+
+void demo_ip_line(const char *label, const uint8_t ip[4]) {
+  KPRINT("***   ? : ?.?.?.?\n", label, Dec(ip[0]), Dec(ip[1]), Dec(ip[2]),
+         Dec(ip[3]));
+}
+
+void demo_intro() {
+  KPRINT("***\n");
+  demo_hr();
+  KPRINT("***   NETWORKING PROJECT DEMO\n");
+  demo_hr();
+  KPRINT("***   mode     : deterministic fake NIC backend\n");
+  KPRINT("***   goal     : show request -> reply behavior clearly\n");
+  KPRINT("***   guest MAC: 52:54:00:12:34:56\n");
+  KPRINT("***   guest IP : 10.0.2.15\n");
+  demo_hr();
+}
 
 void run_smoke_tests(Reporter &reporter) {
   init_frames();
@@ -313,6 +382,131 @@ void run_smoke_tests(Reporter &reporter) {
   reporter.check_eq("smoke.reject_null_rx_buffer", net_recv_raw(nullptr, 64),
                     -1);
   reporter.check_eq("smoke.reject_zero_rx_max", net_recv_raw(out, 0), -1);
+
+  reset_fake_backend();
+}
+
+void run_demo_tests(Reporter &reporter) {
+  reset_fake_backend();
+
+  uint8_t frame[128]{};
+  uint8_t tx[VIRTIO_NET_MAX_FRAME_SIZE]{};
+
+  demo_intro();
+  demo_section("STEP 1: ARP RESOLUTION");
+  KPRINT("***   incoming : host asks \"who has 10.0.2.15?\"\n");
+  demo_mac_line("src MAC  ", k_proto_peer_mac);
+  demo_ip_line("src IP   ", k_proto_peer_ip);
+  demo_ip_line("target IP", k_proto_my_ip);
+
+  build_arp_request(frame);
+  const size_t arp_len = sizeof(EthernetHeader) + sizeof(ArpPacket);
+  bool arp_ok = true;
+  arp_ok &= reporter.quiet_check("demo.arp.inject",
+                                 net_fake_inject_rx(frame, arp_len));
+  arp_ok &= reporter.quiet_check("demo.arp.poll_once", net_poll_once());
+  {
+    size_t tx_len = sizeof(tx);
+    arp_ok &= reporter.quiet_check("demo.arp.reply_captured",
+                                   net_copy_last_tx_for_test(tx, &tx_len));
+    arp_ok &= reporter.quiet_check_eq("demo.arp.reply_len", int(tx_len),
+                                      int(arp_len));
+    if (tx_len == arp_len) {
+      auto *eth = (EthernetHeader *)tx;
+      auto *arp = (ArpPacket *)(tx + sizeof(EthernetHeader));
+      arp_ok &= reporter.quiet_check_bytes("demo.arp.reply_dst", eth->dst,
+                                           k_proto_peer_mac, 6);
+      arp_ok &= reporter.quiet_check_bytes("demo.arp.reply_src", eth->src,
+                                           k_proto_my_mac, 6);
+      arp_ok &= reporter.quiet_check("demo.arp.reply_op",
+                                     be16(arp->oper) == ARP_OP_REPLY);
+      arp_ok &= reporter.quiet_check_bytes("demo.arp.reply_spa", arp->spa,
+                                           k_proto_my_ip, 4);
+      arp_ok &= reporter.quiet_check_bytes("demo.arp.reply_tpa", arp->tpa,
+                                           k_proto_peer_ip, 4);
+
+      KPRINT("***   outgoing : guest sends ARP reply\n");
+      demo_mac_line("dst MAC  ", eth->dst);
+      demo_mac_line("src MAC  ", eth->src);
+      demo_ip_line("sender IP", arp->spa);
+      demo_ip_line("target IP", arp->tpa);
+      KPRINT("***   message  : \"10.0.2.15 is at 52:54:00:12:34:56\"\n");
+    }
+  }
+  demo_status("ARP transformation checks", arp_ok);
+
+  reset_fake_backend();
+
+  demo_section("STEP 2: ICMP ECHO / PING");
+  KPRINT("***   incoming : host sends ICMP echo request\n");
+  demo_ip_line("src IP   ", k_proto_peer_ip);
+  demo_ip_line("dst IP   ", k_proto_my_ip);
+  KPRINT("***   payload  : 8 bytes\n");
+
+  constexpr size_t k_demo_payload_len = 8;
+  build_icmp_echo_request(frame, k_demo_payload_len);
+  const size_t request_len = sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                             sizeof(IcmpEchoHeader) + k_demo_payload_len;
+  bool icmp_ok = true;
+  icmp_ok &= reporter.quiet_check("demo.icmp.inject",
+                                  net_fake_inject_rx(frame, request_len));
+  icmp_ok &= reporter.quiet_check("demo.icmp.poll_once", net_poll_once());
+  {
+    size_t tx_len = sizeof(tx);
+    icmp_ok &= reporter.quiet_check("demo.icmp.reply_captured",
+                                    net_copy_last_tx_for_test(tx, &tx_len));
+    icmp_ok &= reporter.quiet_check_eq("demo.icmp.reply_len", int(tx_len),
+                                       int(request_len));
+    if (tx_len == request_len) {
+      auto *eth = (EthernetHeader *)tx;
+      auto *ip = (Ipv4Header *)(tx + sizeof(EthernetHeader));
+      auto *icmp = (IcmpEchoHeader *)(tx + sizeof(EthernetHeader) +
+                                      sizeof(Ipv4Header));
+      const uint8_t *payload = tx + sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                               sizeof(IcmpEchoHeader);
+      icmp_ok &= reporter.quiet_check_bytes("demo.icmp.reply_dst", eth->dst,
+                                            k_proto_peer_mac, 6);
+      icmp_ok &= reporter.quiet_check_bytes("demo.icmp.reply_src", eth->src,
+                                            k_proto_my_mac, 6);
+      icmp_ok &= reporter.quiet_check_bytes("demo.icmp.reply_ip_src", ip->src_ip,
+                                            k_proto_my_ip, 4);
+      icmp_ok &= reporter.quiet_check_bytes("demo.icmp.reply_ip_dst", ip->dst_ip,
+                                            k_proto_peer_ip, 4);
+      icmp_ok &= reporter.quiet_check("demo.icmp.reply_type",
+                                      icmp->type == ICMP_ECHO_REPLY);
+      icmp_ok &= reporter.quiet_check("demo.icmp.reply_identifier",
+                                      icmp->identifier == be16(0x4444));
+      icmp_ok &= reporter.quiet_check("demo.icmp.reply_sequence",
+                                      icmp->sequence == be16(7));
+      uint8_t expected_payload[k_demo_payload_len];
+      for (size_t i = 0; i < k_demo_payload_len; ++i) {
+        expected_payload[i] = uint8_t(0xa0 + i);
+      }
+      icmp_ok &= reporter.quiet_check_bytes("demo.icmp.reply_payload", payload,
+                                            expected_payload, k_demo_payload_len);
+      icmp_ok &= reporter.quiet_check(
+          "demo.icmp.reply_ip_checksum",
+          checksum16((const uint8_t *)ip, sizeof(Ipv4Header)) == 0);
+      icmp_ok &= reporter.quiet_check(
+          "demo.icmp.reply_checksum",
+          checksum16((const uint8_t *)icmp,
+                     sizeof(IcmpEchoHeader) + k_demo_payload_len) == 0);
+
+      KPRINT("***   outgoing : guest sends ICMP echo reply\n");
+      demo_mac_line("dst MAC  ", eth->dst);
+      demo_mac_line("src MAC  ", eth->src);
+      demo_ip_line("src IP   ", ip->src_ip);
+      demo_ip_line("dst IP   ", ip->dst_ip);
+      KPRINT("***   icmp     : type=0 reply, id=0x4444, seq=7\n");
+      KPRINT("***   payload  : echoed back unchanged\n");
+    }
+  }
+  demo_status("ICMP transformation checks", icmp_ok);
+
+  demo_section("DEMO RESULT");
+  KPRINT("***   result   : ?\n", (arp_ok && icmp_ok) ? "request/reply pipeline works"
+                                                 : "demo detected an error");
+  KPRINT("***   next step: use net_live for a real host-backed NIC demo\n");
 
   reset_fake_backend();
 }
@@ -666,6 +860,9 @@ void net_run_selected_tests(StrongRef<Ext2> fs) {
   Reporter reporter{};
 
   switch (test_case) {
+  case NetTestCase::Demo:
+    run_demo_tests(reporter);
+    break;
   case NetTestCase::Smoke:
     run_smoke_tests(reporter);
     break;
