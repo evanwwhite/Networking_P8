@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+sender_target=net_dual_sender
+responder_target=net_dual_responder
+socket_port="${DUAL_QEMU_PORT:-12345}"
+
+UTCS_OPTS=-O3 make -s "build/${sender_target}.img" "${sender_target}.data" \
+  "build/${responder_target}.img" "${responder_target}.data"
+
+qemu_cmd="$(make -s qemu_cmd)"
+qemu_config_flags="$(make -s qemu_config_flags)"
+
+rm -f "${sender_target}.raw" "${sender_target}.failure" \
+      "${responder_target}.raw" "${responder_target}.failure"
+
+cleanup() {
+  if [[ -n "${responder_pid:-}" ]]; then
+    kill "${responder_pid}" 2>/dev/null || true
+    wait "${responder_pid}" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+"${qemu_cmd}" ${qemu_config_flags} \
+  -no-reboot \
+  -nographic \
+  --monitor none \
+  --serial file:${responder_target}.raw \
+  -drive if=virtio,file=build/${responder_target}.img,index=0,media=disk,format=raw \
+  -drive if=virtio,file=${responder_target}.data,index=1,media=disk,format=raw \
+  -netdev socket,id=net0,listen=127.0.0.1:${socket_port} \
+  -device virtio-net-pci,disable-legacy=on,netdev=net0,mac=52:54:00:12:34:56 \
+  -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+  >"${responder_target}.failure" 2>&1 || true &
+responder_pid=$!
+
+sleep 1
+
+"${qemu_cmd}" ${qemu_config_flags} \
+  -no-reboot \
+  -nographic \
+  --monitor none \
+  --serial file:${sender_target}.raw \
+  -drive if=virtio,file=build/${sender_target}.img,index=0,media=disk,format=raw \
+  -drive if=virtio,file=${sender_target}.data,index=1,media=disk,format=raw \
+  -netdev socket,id=net0,connect=127.0.0.1:${socket_port} \
+  -device virtio-net-pci,disable-legacy=on,netdev=net0,mac=52:54:00:12:34:57 \
+  -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+  >"${sender_target}.failure" 2>&1 || true
+
+wait "${responder_pid}" || true
+responder_pid=
+
+echo
+echo "sender log: ${sender_target}.raw"
+echo "responder log: ${responder_target}.raw"

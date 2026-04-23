@@ -10,6 +10,7 @@ What it demonstrates:
 
 - ARP request in, ARP reply out
 - ICMP echo request in, ICMP echo reply out
+- A readable ping payload such as `hello` crossing the request/reply path
 - Correct source and destination MAC/IP rewriting
 - Valid IPv4 and ICMP checksums on the generated reply
 

@@ -20,6 +20,7 @@ constexpr size_t k_rx_stress_loops = 32;
 enum class NetTestCase : uint8_t {
   None,
   Demo,
+  DualLive,
   Smoke,
   Tx,
   Rx,
@@ -42,6 +43,17 @@ constexpr uint8_t k_proto_my_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
 constexpr uint8_t k_proto_my_ip[4] = {10, 0, 2, 15};
 constexpr uint8_t k_proto_peer_mac[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01};
 constexpr uint8_t k_proto_peer_ip[4] = {10, 0, 2, 2};
+constexpr uint8_t k_dual_sender_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x57};
+constexpr uint8_t k_dual_sender_ip[4] = {10, 0, 2, 21};
+constexpr uint8_t k_dual_responder_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
+constexpr uint8_t k_dual_responder_ip[4] = {10, 0, 2, 15};
+constexpr char k_dual_payload_text[] = "hello";
+
+enum class DualRole : uint8_t {
+  Unknown,
+  Sender,
+  Responder,
+};
 
 TestFrames g_frames{};
 bool g_frames_ready = false;
@@ -128,7 +140,8 @@ void build_arp_request(uint8_t *frame) {
   copy_bytes_local(arp->tpa, k_proto_my_ip, 4);
 }
 
-void build_icmp_echo_request(uint8_t *frame, size_t payload_len) {
+void build_icmp_echo_request_payload(uint8_t *frame, const uint8_t *payload_bytes,
+                                     size_t payload_len) {
   auto *eth = (EthernetHeader *)frame;
   auto *ip = (Ipv4Header *)(frame + sizeof(EthernetHeader));
   auto *icmp =
@@ -160,10 +173,52 @@ void build_icmp_echo_request(uint8_t *frame, size_t payload_len) {
   icmp->identifier = be16(0x4444);
   icmp->sequence = be16(7);
   for (size_t i = 0; i < payload_len; ++i) {
-    payload[i] = uint8_t(0xa0 + i);
+    payload[i] = payload_bytes[i];
   }
   icmp->checksum = be16(
       checksum16((const uint8_t *)icmp, sizeof(IcmpEchoHeader) + payload_len));
+}
+
+void build_arp_request_frame(uint8_t *frame, const uint8_t src_mac[6],
+                             const uint8_t src_ip[4], const uint8_t dst_ip[4]) {
+  auto *eth = (EthernetHeader *)frame;
+  auto *arp = (ArpPacket *)(frame + sizeof(EthernetHeader));
+  uint8_t broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+  uint8_t zero_mac[6] = {};
+
+  copy_bytes_local(eth->dst, broadcast, 6);
+  copy_bytes_local(eth->src, src_mac, 6);
+  eth->ether_type = be16(ETH_TYPE_ARP);
+
+  arp->htype = be16(ARP_HTYPE_ETHERNET);
+  arp->ptype = be16(ARP_PTYPE_IPV4);
+  arp->hlen = 6;
+  arp->plen = 4;
+  arp->oper = be16(ARP_OP_REQUEST);
+  copy_bytes_local(arp->sha, src_mac, 6);
+  copy_bytes_local(arp->spa, src_ip, 4);
+  copy_bytes_local(arp->tha, zero_mac, 6);
+  copy_bytes_local(arp->tpa, dst_ip, 4);
+}
+
+void build_icmp_echo_request(uint8_t *frame, size_t payload_len) {
+  auto *payload = frame + sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                  sizeof(IcmpEchoHeader);
+  for (size_t i = 0; i < payload_len; ++i) {
+    payload[i] = uint8_t(0xa0 + i);
+  }
+  build_icmp_echo_request_payload(frame, payload, payload_len);
+}
+
+void demo_payload_line(const char *label, const uint8_t *payload, size_t len) {
+  char text[64]{};
+  const size_t to_copy = (len < sizeof(text) - 1) ? len : sizeof(text) - 1;
+  for (size_t i = 0; i < to_copy; ++i) {
+    const uint8_t ch = payload[i];
+    text[i] = (ch >= 32 && ch <= 126) ? char(ch) : '.';
+  }
+  text[to_copy] = 0;
+  KPRINT("***   ? : \"?\"\n", label, text);
 }
 
 bool strings_equal(const char *lhs, const char *rhs) {
@@ -197,6 +252,9 @@ void trim_selector(char *buffer) {
 NetTestCase parse_test_case(const char *name) {
   if (strings_equal(name, "demo")) {
     return NetTestCase::Demo;
+  }
+  if (strings_equal(name, "dual_live")) {
+    return NetTestCase::DualLive;
   }
   if (strings_equal(name, "smoke")) {
     return NetTestCase::Smoke;
@@ -244,6 +302,45 @@ NetTestCase read_test_case(StrongRef<Ext2> fs, char *buffer, size_t buffer_size)
   buffer[count] = 0;
   trim_selector(buffer);
   return parse_test_case(buffer);
+}
+
+bool read_named_file(StrongRef<Ext2> fs, const char *name, char *buffer,
+                     size_t buffer_size) {
+  if (buffer_size == 0) {
+    return false;
+  }
+
+  auto node = fs->find(fs->root, name);
+  if (node == nullptr) {
+    buffer[0] = 0;
+    return false;
+  }
+
+  const size_t to_read =
+      min_size(size_t(node->size_in_bytes()), buffer_size - 1);
+  const int64_t count = node->read_all(0, uint32_t(to_read), buffer);
+  if (count <= 0) {
+    buffer[0] = 0;
+    return false;
+  }
+
+  buffer[count] = 0;
+  trim_selector(buffer);
+  return true;
+}
+
+DualRole read_dual_role(StrongRef<Ext2> fs) {
+  char buffer[k_selector_buffer_size]{};
+  if (!read_named_file(fs, "net_role", buffer, sizeof(buffer))) {
+    return DualRole::Unknown;
+  }
+  if (strings_equal(buffer, "sender")) {
+    return DualRole::Sender;
+  }
+  if (strings_equal(buffer, "responder")) {
+    return DualRole::Responder;
+  }
+  return DualRole::Unknown;
 }
 
 struct Reporter {
@@ -441,10 +538,11 @@ void run_demo_tests(Reporter &reporter) {
   KPRINT("***   incoming : host sends ICMP echo request\n");
   demo_ip_line("src IP   ", k_proto_peer_ip);
   demo_ip_line("dst IP   ", k_proto_my_ip);
-  KPRINT("***   payload  : 8 bytes\n");
+  constexpr uint8_t k_demo_payload[] = {'h', 'e', 'l', 'l', 'o'};
+  demo_payload_line("payload  ", k_demo_payload, sizeof(k_demo_payload));
 
-  constexpr size_t k_demo_payload_len = 8;
-  build_icmp_echo_request(frame, k_demo_payload_len);
+  constexpr size_t k_demo_payload_len = sizeof(k_demo_payload);
+  build_icmp_echo_request_payload(frame, k_demo_payload, k_demo_payload_len);
   const size_t request_len = sizeof(EthernetHeader) + sizeof(Ipv4Header) +
                              sizeof(IcmpEchoHeader) + k_demo_payload_len;
   bool icmp_ok = true;
@@ -478,12 +576,8 @@ void run_demo_tests(Reporter &reporter) {
                                       icmp->identifier == be16(0x4444));
       icmp_ok &= reporter.quiet_check("demo.icmp.reply_sequence",
                                       icmp->sequence == be16(7));
-      uint8_t expected_payload[k_demo_payload_len];
-      for (size_t i = 0; i < k_demo_payload_len; ++i) {
-        expected_payload[i] = uint8_t(0xa0 + i);
-      }
       icmp_ok &= reporter.quiet_check_bytes("demo.icmp.reply_payload", payload,
-                                            expected_payload, k_demo_payload_len);
+                                            k_demo_payload, k_demo_payload_len);
       icmp_ok &= reporter.quiet_check(
           "demo.icmp.reply_ip_checksum",
           checksum16((const uint8_t *)ip, sizeof(Ipv4Header)) == 0);
@@ -498,7 +592,8 @@ void run_demo_tests(Reporter &reporter) {
       demo_ip_line("src IP   ", ip->src_ip);
       demo_ip_line("dst IP   ", ip->dst_ip);
       KPRINT("***   icmp     : type=0 reply, id=0x4444, seq=7\n");
-      KPRINT("***   payload  : echoed back unchanged\n");
+      demo_payload_line("payload  ", payload, k_demo_payload_len);
+      KPRINT("***   message  : receiver saw the text and echoed it back\n");
     }
   }
   demo_status("ICMP transformation checks", icmp_ok);
@@ -847,6 +942,274 @@ void run_real_tx_tests(Reporter &reporter) {
                     net_recv_raw(out, sizeof(out)), 0);
 }
 
+bool wait_for_matching_frame(uint8_t *frame, size_t *frame_len,
+                             uint64_t timeout_jiffies,
+                             bool (*match)(const uint8_t *, size_t)) {
+  uint8_t tmp[VIRTIO_NET_MAX_FRAME_SIZE]{};
+
+  while (Pit::jiffies < timeout_jiffies) {
+    int recv_len = net_recv_raw(tmp, sizeof(tmp));
+    if (recv_len > 0) {
+      if (match(tmp, size_t(recv_len))) {
+        const size_t to_copy = min_size(*frame_len, size_t(recv_len));
+        copy_bytes_local(frame, tmp, to_copy);
+        *frame_len = size_t(recv_len);
+        return true;
+      }
+      continue;
+    }
+    Thread::yield();
+  }
+
+  return false;
+}
+
+bool is_dual_arp_reply(const uint8_t *frame, size_t len) {
+  if (len < sizeof(EthernetHeader) + sizeof(ArpPacket)) {
+    return false;
+  }
+  auto *eth = (const EthernetHeader *)frame;
+  auto *arp = (const ArpPacket *)(frame + sizeof(EthernetHeader));
+  return be16(eth->ether_type) == ETH_TYPE_ARP &&
+         be16(arp->oper) == ARP_OP_REPLY &&
+         bytes_equal(eth->src, k_dual_responder_mac, 6) &&
+         bytes_equal(arp->spa, k_dual_responder_ip, 4) &&
+         bytes_equal(arp->tpa, k_dual_sender_ip, 4);
+}
+
+bool is_dual_icmp_reply(const uint8_t *frame, size_t len) {
+  const size_t payload_len = sizeof(k_dual_payload_text) - 1;
+  const size_t want_len = sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                          sizeof(IcmpEchoHeader) + payload_len;
+  if (len != want_len) {
+    return false;
+  }
+
+  auto *eth = (const EthernetHeader *)frame;
+  auto *ip = (const Ipv4Header *)(frame + sizeof(EthernetHeader));
+  auto *icmp =
+      (const IcmpEchoHeader *)(frame + sizeof(EthernetHeader) + sizeof(Ipv4Header));
+  const uint8_t *payload =
+      frame + sizeof(EthernetHeader) + sizeof(Ipv4Header) + sizeof(IcmpEchoHeader);
+
+  return be16(eth->ether_type) == ETH_TYPE_IPV4 &&
+         bytes_equal(eth->src, k_dual_responder_mac, 6) &&
+         bytes_equal(ip->src_ip, k_dual_responder_ip, 4) &&
+         bytes_equal(ip->dst_ip, k_dual_sender_ip, 4) &&
+         icmp->type == ICMP_ECHO_REPLY &&
+         icmp->identifier == be16(0x5151) &&
+         icmp->sequence == be16(1) &&
+         bytes_equal(payload, (const uint8_t *)k_dual_payload_text, payload_len);
+}
+
+bool try_dual_send_arp_reply(const uint8_t *frame, size_t len) {
+  if (len < sizeof(EthernetHeader) + sizeof(ArpPacket)) {
+    return false;
+  }
+
+  auto *eth = (const EthernetHeader *)frame;
+  auto *arp = (const ArpPacket *)(frame + sizeof(EthernetHeader));
+  if (be16(eth->ether_type) != ETH_TYPE_ARP || be16(arp->oper) != ARP_OP_REQUEST ||
+      !bytes_equal(arp->tpa, k_dual_responder_ip, 4)) {
+    return false;
+  }
+
+  uint8_t reply[sizeof(EthernetHeader) + sizeof(ArpPacket)]{};
+  auto *out_eth = (EthernetHeader *)reply;
+  auto *out_arp = (ArpPacket *)(reply + sizeof(EthernetHeader));
+
+  copy_bytes_local(out_eth->dst, eth->src, 6);
+  copy_bytes_local(out_eth->src, k_dual_responder_mac, 6);
+  out_eth->ether_type = be16(ETH_TYPE_ARP);
+
+  out_arp->htype = be16(ARP_HTYPE_ETHERNET);
+  out_arp->ptype = be16(ARP_PTYPE_IPV4);
+  out_arp->hlen = 6;
+  out_arp->plen = 4;
+  out_arp->oper = be16(ARP_OP_REPLY);
+  copy_bytes_local(out_arp->sha, k_dual_responder_mac, 6);
+  copy_bytes_local(out_arp->spa, k_dual_responder_ip, 4);
+  copy_bytes_local(out_arp->tha, arp->sha, 6);
+  copy_bytes_local(out_arp->tpa, arp->spa, 4);
+
+  KPRINT("*** DUAL responder : ARP reply to ?.?.?.?\n", Dec(arp->spa[0]),
+         Dec(arp->spa[1]), Dec(arp->spa[2]), Dec(arp->spa[3]));
+  return net_send_raw(reply, sizeof(reply));
+}
+
+bool try_dual_send_icmp_reply(const uint8_t *frame, size_t len) {
+  const size_t min_len =
+      sizeof(EthernetHeader) + sizeof(Ipv4Header) + sizeof(IcmpEchoHeader);
+  if (len < min_len) {
+    return false;
+  }
+
+  auto *eth = (const EthernetHeader *)frame;
+  auto *ip = (const Ipv4Header *)(frame + sizeof(EthernetHeader));
+  if (be16(eth->ether_type) != ETH_TYPE_IPV4 || ip->protocol != IPV4_PROTO_ICMP ||
+      !bytes_equal(ip->dst_ip, k_dual_responder_ip, 4)) {
+    return false;
+  }
+
+  const size_t ip_total_len = be16(ip->total_length);
+  if (ip_total_len < sizeof(Ipv4Header) + sizeof(IcmpEchoHeader) ||
+      sizeof(EthernetHeader) + ip_total_len > len) {
+    return false;
+  }
+
+  auto *icmp =
+      (const IcmpEchoHeader *)(frame + sizeof(EthernetHeader) + sizeof(Ipv4Header));
+  if (icmp->type != ICMP_ECHO_REQUEST) {
+    return false;
+  }
+
+  const size_t payload_len = ip_total_len - sizeof(Ipv4Header) - sizeof(IcmpEchoHeader);
+  const uint8_t *payload = frame + sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                           sizeof(IcmpEchoHeader);
+
+  uint8_t reply[VIRTIO_NET_MAX_FRAME_SIZE]{};
+  copy_bytes_local(reply, frame, sizeof(EthernetHeader) + ip_total_len);
+
+  auto *out_eth = (EthernetHeader *)reply;
+  auto *out_ip = (Ipv4Header *)(reply + sizeof(EthernetHeader));
+  auto *out_icmp =
+      (IcmpEchoHeader *)(reply + sizeof(EthernetHeader) + sizeof(Ipv4Header));
+
+  copy_bytes_local(out_eth->dst, eth->src, 6);
+  copy_bytes_local(out_eth->src, k_dual_responder_mac, 6);
+  copy_bytes_local(out_ip->src_ip, k_dual_responder_ip, 4);
+  copy_bytes_local(out_ip->dst_ip, ip->src_ip, 4);
+  out_ip->header_checksum = 0;
+  out_ip->header_checksum =
+      be16(checksum16((const uint8_t *)out_ip, sizeof(Ipv4Header)));
+
+  out_icmp->type = ICMP_ECHO_REPLY;
+  out_icmp->code = 0;
+  out_icmp->checksum = 0;
+  out_icmp->checksum = be16(
+      checksum16((const uint8_t *)out_icmp, sizeof(IcmpEchoHeader) + payload_len));
+
+  demo_payload_line("payload  ", payload, payload_len);
+  KPRINT("*** DUAL responder : ICMP echo reply\n");
+  return net_send_raw(reply, sizeof(EthernetHeader) + ip_total_len);
+}
+
+void run_dual_sender(Reporter &reporter) {
+  uint8_t frame[128]{};
+  uint8_t reply[VIRTIO_NET_MAX_FRAME_SIZE]{};
+
+  KPRINT("*** DUAL role    : sender\n");
+  demo_ip_line("sender IP", k_dual_sender_ip);
+  demo_ip_line("peer IP  ", k_dual_responder_ip);
+  reporter.check("dual.sender.ready_after_pci_init", net_ready());
+
+  uint64_t start = Pit::jiffies;
+  while (Pit::jiffies < start + 1000) {
+    Thread::yield();
+  }
+
+  build_arp_request_frame(frame, k_dual_sender_mac, k_dual_sender_ip,
+                          k_dual_responder_ip);
+  KPRINT("*** DUAL sender : ARP who-has ?.?.?.?\n", Dec(k_dual_responder_ip[0]),
+         Dec(k_dual_responder_ip[1]), Dec(k_dual_responder_ip[2]),
+         Dec(k_dual_responder_ip[3]));
+  reporter.check("dual.sender.arp_request_tx",
+                 net_send_raw(frame, sizeof(EthernetHeader) + sizeof(ArpPacket)));
+
+  size_t reply_len = sizeof(reply);
+  reporter.check(
+      "dual.sender.arp_reply_rx",
+      wait_for_matching_frame(reply, &reply_len, Pit::jiffies + 3000,
+                              is_dual_arp_reply));
+  if (is_dual_arp_reply(reply, reply_len)) {
+    KPRINT("*** DUAL sender : learned ?.?.?.? is at ?:?:?:?:?:?\n",
+           Dec(k_dual_responder_ip[0]), Dec(k_dual_responder_ip[1]),
+           Dec(k_dual_responder_ip[2]), Dec(k_dual_responder_ip[3]), reply[6],
+           reply[7], reply[8], reply[9], reply[10], reply[11]);
+  }
+
+  build_icmp_echo_request_payload(
+      frame, (const uint8_t *)k_dual_payload_text, sizeof(k_dual_payload_text) - 1);
+  auto *eth = (EthernetHeader *)frame;
+  auto *ip = (Ipv4Header *)(frame + sizeof(EthernetHeader));
+  auto *icmp =
+      (IcmpEchoHeader *)(frame + sizeof(EthernetHeader) + sizeof(Ipv4Header));
+  copy_bytes_local(eth->dst, k_dual_responder_mac, 6);
+  copy_bytes_local(eth->src, k_dual_sender_mac, 6);
+  copy_bytes_local(ip->src_ip, k_dual_sender_ip, 4);
+  copy_bytes_local(ip->dst_ip, k_dual_responder_ip, 4);
+  ip->header_checksum = 0;
+  ip->header_checksum =
+      be16(checksum16((const uint8_t *)ip, sizeof(Ipv4Header)));
+  icmp->identifier = be16(0x5151);
+  icmp->sequence = be16(1);
+  icmp->checksum = 0;
+  icmp->checksum = be16(checksum16(
+      (const uint8_t *)icmp,
+      sizeof(IcmpEchoHeader) + (sizeof(k_dual_payload_text) - 1)));
+
+  KPRINT("*** DUAL sender : ping text \"?\"\n", k_dual_payload_text);
+  reporter.check(
+      "dual.sender.icmp_request_tx",
+      net_send_raw(frame, sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                              sizeof(IcmpEchoHeader) +
+                              (sizeof(k_dual_payload_text) - 1)));
+
+  reply_len = sizeof(reply);
+  reporter.check(
+      "dual.sender.icmp_reply_rx",
+      wait_for_matching_frame(reply, &reply_len, Pit::jiffies + 3000,
+                              is_dual_icmp_reply));
+  if (is_dual_icmp_reply(reply, reply_len)) {
+    KPRINT("*** DUAL sender : peer echoed \"?\"\n", k_dual_payload_text);
+  }
+}
+
+void run_dual_responder(Reporter &reporter) {
+  KPRINT("*** DUAL role    : responder\n");
+  demo_ip_line("responder", k_dual_responder_ip);
+  demo_ip_line("peer IP  ", k_dual_sender_ip);
+  reporter.check("dual.responder.ready_after_pci_init", net_ready());
+
+  const uint64_t until = Pit::jiffies + 5000;
+  bool saw_traffic = false;
+  bool sent_arp_reply = false;
+  bool sent_icmp_reply = false;
+  uint8_t frame[VIRTIO_NET_MAX_FRAME_SIZE]{};
+  while (Pit::jiffies < until) {
+    int recv_len = net_recv_raw(frame, sizeof(frame));
+    if (recv_len > 0) {
+      saw_traffic = true;
+      sent_arp_reply =
+          try_dual_send_arp_reply(frame, size_t(recv_len)) || sent_arp_reply;
+      sent_icmp_reply =
+          try_dual_send_icmp_reply(frame, size_t(recv_len)) || sent_icmp_reply;
+      continue;
+    }
+    Thread::yield();
+  }
+
+  reporter.check("dual.responder.saw_live_traffic", saw_traffic);
+  reporter.check("dual.responder.arp_reply_tx", sent_arp_reply);
+  reporter.check("dual.responder.icmp_reply_tx", sent_icmp_reply);
+}
+
+void run_dual_live_tests(Reporter &reporter, StrongRef<Ext2> fs) {
+  const DualRole role = read_dual_role(fs);
+  if (role == DualRole::Unknown) {
+    reporter.fail("dual.role_missing_or_unknown");
+    return;
+  }
+
+  if (role == DualRole::Sender) {
+    net_set_identity(k_dual_sender_mac, k_dual_sender_ip);
+    run_dual_sender(reporter);
+    return;
+  }
+
+  run_dual_responder(reporter);
+}
+
 } // namespace
 
 void net_run_selected_tests(StrongRef<Ext2> fs) {
@@ -862,6 +1225,9 @@ void net_run_selected_tests(StrongRef<Ext2> fs) {
   switch (test_case) {
   case NetTestCase::Demo:
     run_demo_tests(reporter);
+    break;
+  case NetTestCase::DualLive:
+    run_dual_live_tests(reporter, fs);
     break;
   case NetTestCase::Smoke:
     run_smoke_tests(reporter);

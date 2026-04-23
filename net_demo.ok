@@ -29,14 +29,15 @@
 ***   incoming : host sends ICMP echo request
 ***   src IP    : 10.0.2.2
 ***   dst IP    : 10.0.2.15
-***   payload  : 8 bytes
+***   payload   : "hello"
 ***   outgoing : guest sends ICMP echo reply
 ***   dst MAC   : 02:00:00:00:00:01
 ***   src MAC   : 52:54:00:12:34:56
 ***   src IP    : 10.0.2.15
 ***   dst IP    : 10.0.2.2
 ***   icmp     : type=0 reply, id=0x4444, seq=7
-***   payload  : echoed back unchanged
+***   payload   : "hello"
+***   message  : receiver saw the text and echoed it back
 ***   status   : OK
 ***
 *** ============================================================

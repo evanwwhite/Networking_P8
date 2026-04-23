@@ -4,6 +4,7 @@
 #include "ethernet.h"
 #include "icmp.h"
 #include "ipv4.h"
+#include "print.h"
 #include "virtio_net.h"
 
 // Convert a 16-bit value between byte orders.
@@ -153,6 +154,30 @@ static void copy_payload(uint8_t* dst, const uint8_t* src, std::size_t len) {
     copy_bytes(dst, src, len);
 }
 
+static bool payload_is_printable_ascii(const uint8_t* data, std::size_t len) {
+    if (data == nullptr || len == 0) return false;
+
+    for (std::size_t i = 0; i < len; i++) {
+        const uint8_t ch = data[i];
+        if (ch < 32 || ch > 126) return false;
+    }
+    return true;
+}
+
+static void log_ascii_payload(const char* prefix, const uint8_t* data, std::size_t len) {
+    if (!payload_is_printable_ascii(data, len)) return;
+
+    constexpr std::size_t k_max_logged_payload = 63;
+    char text[k_max_logged_payload + 1] = {};
+    const std::size_t to_copy = (len < k_max_logged_payload) ? len : k_max_logged_payload;
+    for (std::size_t i = 0; i < to_copy; i++) {
+        text[i] = char(data[i]);
+    }
+    text[to_copy] = 0;
+
+    KPRINT("net: ? \"?\"\n", prefix, text);
+}
+
 // Compute where the ICMP message starts inside the frame.
 // Layout is:
 // [ Ethernet header ][ IPv4 header ][ ICMP header ][ payload ]
@@ -240,6 +265,9 @@ static void handle_ipv4(const uint8_t* data, std::size_t len) {
 
     std::size_t icmp_len = ip_total_len - ip_hdr_len;
     std::size_t payload_len = icmp_len - sizeof(IcmpEchoHeader);
+    const uint8_t* in_payload = data + icmp_off + sizeof(IcmpEchoHeader);
+
+    log_ascii_payload("icmp echo payload", in_payload, payload_len);
 
     // Build reply in a temporary buffer.
     // 1514 is a normal Ethernet frame-sized buffer.
@@ -256,7 +284,6 @@ static void handle_ipv4(const uint8_t* data, std::size_t len) {
     copy_icmp_echo_reply(out_icmp, icmp);
 
     // Copy the ping payload unchanged
-    const uint8_t* in_payload = data + icmp_off + sizeof(IcmpEchoHeader);
     uint8_t* out_payload = reply + sizeof(EthernetHeader) + ip_hdr_len + sizeof(IcmpEchoHeader);
     copy_payload(out_payload, in_payload, payload_len);
 
@@ -308,4 +335,13 @@ bool net_poll_once() {
 
     net_handle_frame(frame, std::size_t(recv_len));
     return true;
+}
+
+void net_set_identity(const uint8_t mac[6], const uint8_t ip[4]) {
+    if (mac != nullptr) {
+        copy_bytes(g_my_mac, mac, 6);
+    }
+    if (ip != nullptr) {
+        copy_bytes(g_my_ip, ip, 4);
+    }
 }

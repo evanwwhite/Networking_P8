@@ -197,7 +197,7 @@ limine/limine: Makefile limine/*.c limine/*.h limine/Makefile
 LIMINE_FILES := limine.conf limine/limine-bios.sys limine/BOOTX64.EFI
 
 
-${TEST_IMAGES} : build/%.img: build/kernel.elf Makefile limine/limine %.data ${LIMINE_FILES}
+build/%.img: build/kernel.elf Makefile limine/limine %.data ${LIMINE_FILES}
 	# borrowed from https://codeberg.org/Limine/limine-cxx-template/src/branch/trunk/GNUmakefile
 	rm -f $@
 	# zero-filled 20MB raw disk image
@@ -228,7 +228,7 @@ ${TEST_RAWS} : %.raw : Makefile %
 
 BLOCK_SIZE = 4096
 
-${TEST_DATA} : %.data : Makefile
+%.data : Makefile
 	@if test -f ${TESTS_DIR}/$*.dir/Makefile; then \
 		$(MAKE) -C ${TESTS_DIR}/$*.dir; \
 	fi
