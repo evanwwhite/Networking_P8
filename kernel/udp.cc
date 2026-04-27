@@ -15,6 +15,7 @@ namespace {
 
 constexpr uint8_t UDP_HANDLER_CAPACITY = 8;
 
+// Minimal port dispatch table. This is enough for the chat demo and tests.
 struct UdpHandlerEntry {
   bool valid;
   uint16_t port;
@@ -44,6 +45,7 @@ bool udp_register_handler(uint16_t port, UdpHandler handler) {
   }
 
   LockGuard guard{g_udp_lock};
+  // Re-registering a port updates the handler instead of consuming a new slot.
   for (uint8_t i = 0; i < UDP_HANDLER_CAPACITY; ++i) {
     if (g_udp_handlers[i].valid && g_udp_handlers[i].port == port) {
       g_udp_handlers[i].handler = handler;
@@ -89,6 +91,7 @@ bool udp_handle_packet(const uint8_t src_ip[4], const uint8_t *data,
     return false;
   }
 
+  // Look up the destination port before touching the payload.
   UdpHandler handler = nullptr;
   {
     LockGuard guard{g_udp_lock};
@@ -105,6 +108,7 @@ bool udp_handle_packet(const uint8_t src_ip[4], const uint8_t *data,
     return false;
   }
 
+  // From here on the packet is valid and has an interested receiver.
   const uint8_t *payload = data + sizeof(UdpHeader);
   const std::size_t payload_len = udp_len - sizeof(UdpHeader);
   net_stats_increment(NetStatCounter::UdpRx);
@@ -131,6 +135,7 @@ bool udp_send_to(const uint8_t dst_ip[4], uint16_t src_port, uint16_t dst_port,
     return false;
   }
 
+  // Build just the UDP datagram; net_send_ipv4 adds IPv4 and Ethernet.
   auto udp = reinterpret_cast<UdpHeader *>(packet);
   udp->src_port = bswap16(src_port);
   udp->dst_port = bswap16(dst_port);

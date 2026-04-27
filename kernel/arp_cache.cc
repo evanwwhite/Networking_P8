@@ -12,6 +12,7 @@ namespace {
 
 SpinLock g_arp_cache_lock{};
 ArpEntry g_arp_cache[ARP_CACHE_CAPACITY]{};
+// Monotonic counter used to choose the oldest entry when the cache is full.
 uint64_t g_arp_cache_clock = 0;
 
 bool bytes_equal(const uint8_t *lhs, const uint8_t *rhs, uint8_t len) {
@@ -30,6 +31,7 @@ void copy_bytes(uint8_t *dst, const uint8_t *src, uint8_t len) {
 }
 
 int find_entry_locked(const uint8_t ip[4]) {
+  // Caller holds g_arp_cache_lock.
   for (uint8_t i = 0; i < ARP_CACHE_CAPACITY; ++i) {
     if (g_arp_cache[i].valid && bytes_equal(g_arp_cache[i].ip, ip, 4)) {
       return i;
@@ -39,6 +41,7 @@ int find_entry_locked(const uint8_t ip[4]) {
 }
 
 uint8_t choose_insert_slot_locked() {
+  // Prefer an empty slot; otherwise evict the least recently used entry.
   for (uint8_t i = 0; i < ARP_CACHE_CAPACITY; ++i) {
     if (!g_arp_cache[i].valid) {
       return i;
@@ -120,6 +123,7 @@ bool arp_cache_lookup(const uint8_t ip[4], uint8_t mac_out[6]) {
     return false;
   }
 
+  // A lookup hit refreshes last_seen so active peers are less likely to evict.
   copy_bytes(mac_out, g_arp_cache[slot].mac, 6);
   g_arp_cache[slot].last_seen = ++g_arp_cache_clock;
   KPRINT("net: ARP lookup ");
@@ -129,6 +133,7 @@ bool arp_cache_lookup(const uint8_t ip[4], uint8_t mac_out[6]) {
 }
 
 bool arp_cache_snapshot(uint8_t index, ArpEntry *out) {
+  // Test helper: copy one slot without exposing the cache lock.
   if (out == nullptr || index >= ARP_CACHE_CAPACITY) {
     return false;
   }

@@ -14,6 +14,7 @@ SpinLock g_stats_lock{};
 NetStats g_stats{};
 
 uint64_t &counter_ref(NetStats &stats, NetStatCounter counter) {
+  // Central mapping keeps increment and tests from duplicating switch logic.
   switch (counter) {
   case NetStatCounter::RawRx:
     return stats.raw_rx;
@@ -63,6 +64,7 @@ void net_stats_increment(NetStatCounter counter) {
 }
 
 NetStats net_stats_snapshot() {
+  // Return a copy so callers can inspect counters without holding the lock.
   LockGuard guard{g_stats_lock};
   return g_stats;
 }

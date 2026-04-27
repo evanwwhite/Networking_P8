@@ -23,8 +23,8 @@ static uint16_t bswap16(uint16_t x) {
 
 extern bool net_send_raw(const uint8_t* data, std::size_t len);
 
-// Temporary identity for our OS on the network.
-// Later this should probably come from Person 1 / dev ice setup.
+// Default identity for the guest. Dual-QEMU tests override this with
+// net_set_identity() so each VM has a distinct MAC/IP pair.
 static uint8_t g_my_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
 static uint8_t g_my_ip[4]  = {10, 0, 2, 15};
 
@@ -171,6 +171,7 @@ static bool payload_is_printable_ascii(const uint8_t* data, std::size_t len) {
     return true;
 }
 
+// Keep demo logs readable by printing payload text only when it is safe ASCII.
 static void log_ascii_payload(const char* prefix, const uint8_t* data, std::size_t len) {
     if (!payload_is_printable_ascii(data, len)) return;
 
@@ -219,6 +220,7 @@ static void handle_arp(const uint8_t* data, std::size_t len) {
     auto arp = reinterpret_cast<const ArpPacket*>(data + sizeof(EthernetHeader));
     uint16_t op = bswap16(arp->oper);
 
+    // Learn sender IP->MAC mappings from both requests and replies.
     if (arp->hlen == 6 && arp->plen == 4 &&
         bswap16(arp->htype) == ARP_HTYPE_ETHERNET &&
         bswap16(arp->ptype) == ARP_PTYPE_IPV4) {
@@ -293,6 +295,7 @@ bool net_send_arp_request(const uint8_t target_ip[4]) {
         return false;
     }
 
+    // Broadcast because we do not know the target MAC yet.
     uint8_t request[sizeof(EthernetHeader) + sizeof(ArpPacket)] = {};
     auto out_eth = reinterpret_cast<EthernetHeader*>(request);
     auto out_arp = reinterpret_cast<ArpPacket*>(request + sizeof(EthernetHeader));
@@ -326,8 +329,8 @@ bool net_send_arp_request(const uint8_t target_ip[4]) {
     return true;
 }
 
-// Handle IPv4 packets.
-// For this project, we only care about ICMP ping requests.
+// Handle IPv4 packets addressed to this guest.
+// Supported payloads are UDP and ICMP echo requests.
 static void handle_ipv4(const uint8_t* data, std::size_t len) {
     if (len < sizeof(EthernetHeader) + sizeof(Ipv4Header)) {
         net_stats_increment(NetStatCounter::DroppedShort);
@@ -387,6 +390,7 @@ static void handle_ipv4(const uint8_t* data, std::size_t len) {
     }
 
     if (ip->protocol == IPV4_PROTO_UDP) {
+        // UDP gets dispatched through the registered-port handler table.
         const uint8_t* udp_data = data + sizeof(EthernetHeader) + ip_hdr_len;
         const std::size_t udp_len = ip_total_len - ip_hdr_len;
         udp_handle_packet(ip->src_ip, udp_data, udp_len);
@@ -492,6 +496,7 @@ bool net_send_ipv4(const uint8_t dst_ip[4], uint8_t protocol,
         return false;
     }
 
+    // Build Ethernet + IPv4 + caller payload in one raw frame.
     uint8_t frame[VIRTIO_NET_MAX_FRAME_SIZE] = {};
     auto eth = reinterpret_cast<EthernetHeader*>(frame);
     auto ip = reinterpret_cast<Ipv4Header*>(frame + sizeof(EthernetHeader));
@@ -531,9 +536,7 @@ bool net_send_ipv4(const uint8_t dst_ip[4], uint8_t protocol,
     return true;
 }
 
-// Main entry point for the protocol layer.
-// Person 2 gives us a raw Ethernet frame here.
-// We inspect the outer Ethernet header and choose what to do.
+// Main entry point for the protocol layer: classify one raw Ethernet frame.
 void net_handle_frame(const uint8_t* data, std::size_t len) {
     if (len < sizeof(EthernetHeader)) {
         net_stats_increment(NetStatCounter::DroppedShort);
@@ -570,6 +573,7 @@ void net_handle_frame(const uint8_t* data, std::size_t len) {
 }
 
 bool net_poll_once() {
+    // Poll at most one raw frame so tests and demos can drive progress slowly.
     uint8_t frame[VIRTIO_NET_MAX_FRAME_SIZE] = {};
     int recv_len = net_recv_raw(frame, sizeof(frame));
     if (recv_len <= 0) return false;
@@ -579,6 +583,7 @@ bool net_poll_once() {
 }
 
 void net_set_identity(const uint8_t mac[6], const uint8_t ip[4]) {
+    // Used by dual-QEMU tests to make sender and responder unique.
     if (mac != nullptr) {
         copy_bytes(g_my_mac, mac, 6);
     }

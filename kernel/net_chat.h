@@ -10,6 +10,7 @@ constexpr uint16_t NET_CHAT_PORT = 4390;
 constexpr std::size_t NET_CHAT_TEXT_SIZE = 128;
 constexpr uint8_t NET_CHAT_HISTORY_SIZE = 8;
 
+// One sanitized chat message stored by the UDP chat layer.
 struct ChatMessage {
   bool valid;
   uint8_t src_ip[4];
@@ -19,7 +20,10 @@ struct ChatMessage {
 
 bool net_chat_init();
 void net_chat_reset();
+// Send printable text to a peer over UDP port NET_CHAT_PORT.
 bool net_chat_send(const uint8_t dst_ip[4], const char *text);
+// Pop the oldest unread message into out.
 bool net_chat_recv(char *out, std::size_t max_len);
+// Poll one network frame after ensuring the chat UDP handler is registered.
 bool net_chat_poll();
 void net_chat_print_history();

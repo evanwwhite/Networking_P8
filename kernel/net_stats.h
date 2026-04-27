@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+// Counters used by tests and debug logs to prove each network path ran.
 struct NetStats {
   uint64_t raw_rx;
   uint64_t raw_tx;

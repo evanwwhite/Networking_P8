@@ -144,6 +144,7 @@ uint16_t checksum16(const uint8_t *data, size_t len) {
 }
 
 void build_arp_request(uint8_t *frame) {
+  // Synthetic ARP request used to prove the protocol layer sends a reply.
   auto *eth = (EthernetHeader *)frame;
   auto *arp = (ArpPacket *)(frame + sizeof(EthernetHeader));
   uint8_t broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
@@ -165,6 +166,7 @@ void build_arp_request(uint8_t *frame) {
 
 void build_icmp_echo_request_payload(uint8_t *frame, const uint8_t *payload_bytes,
                                      size_t payload_len) {
+  // Synthetic ping request with valid IPv4 and ICMP checksums.
   auto *eth = (EthernetHeader *)frame;
   auto *ip = (Ipv4Header *)(frame + sizeof(EthernetHeader));
   auto *icmp =
@@ -204,6 +206,7 @@ void build_icmp_echo_request_payload(uint8_t *frame, const uint8_t *payload_byte
 
 void build_udp_packet(uint8_t *frame, uint16_t src_port, uint16_t dst_port,
                       const uint8_t *payload_bytes, size_t payload_len) {
+  // Synthetic IPv4/UDP frame used to test dispatch without live hardware.
   auto *eth = (EthernetHeader *)frame;
   auto *ip = (Ipv4Header *)(frame + sizeof(EthernetHeader));
   auto *udp = (UdpHeader *)(frame + sizeof(EthernetHeader) + sizeof(Ipv4Header));
@@ -538,6 +541,7 @@ void demo_intro() {
 }
 
 void run_smoke_tests(Reporter &reporter) {
+  // Basic API contract: backend lifecycle and argument validation.
   init_frames();
 
   uint8_t out[64]{};
@@ -563,6 +567,7 @@ void run_smoke_tests(Reporter &reporter) {
 }
 
 void run_demo_tests(Reporter &reporter) {
+  // Presentation-style walkthrough of ARP and ping over the fake backend.
   reset_fake_backend();
 
   uint8_t frame[128]{};
@@ -686,6 +691,7 @@ void run_demo_tests(Reporter &reporter) {
 }
 
 void run_tx_tests(Reporter &reporter) {
+  // Exercises raw TX queue movement and validation in fake mode.
   init_frames();
   reset_fake_backend();
 
@@ -723,6 +729,7 @@ void run_tx_tests(Reporter &reporter) {
 }
 
 void run_rx_tests(Reporter &reporter) {
+  // Exercises fake RX injection, dequeue, and buffer recycling.
   init_frames();
   reset_fake_backend();
 
@@ -781,6 +788,7 @@ void run_rx_tests(Reporter &reporter) {
 }
 
 void run_queue_tests(Reporter &reporter) {
+  // Stresses ring wraparound and full/empty queue behavior.
   init_frames();
   uint8_t out[VIRTIO_NET_MAX_FRAME_SIZE]{};
 
@@ -877,6 +885,7 @@ void run_queue_tests(Reporter &reporter) {
 }
 
 void run_debug_tests(Reporter &reporter) {
+  // Verifies debug dumps stay bounded and do not affect queue state.
   init_frames();
   reset_fake_backend();
 
@@ -903,6 +912,7 @@ void run_debug_tests(Reporter &reporter) {
 }
 
 void run_stats_tests(Reporter &reporter) {
+  // Verifies counters for successful packets and expected drop paths.
   reset_fake_backend();
   net_stats_reset();
 
@@ -1014,6 +1024,7 @@ void run_stats_tests(Reporter &reporter) {
 }
 
 void run_arp_cache_tests(Reporter &reporter) {
+  // Verifies learning, eviction, ARP miss, and IPv4 send-on-hit behavior.
   reset_fake_backend();
   net_stats_reset();
   arp_cache_reset();
@@ -1141,6 +1152,7 @@ void run_arp_cache_tests(Reporter &reporter) {
 }
 
 void run_udp_tests(Reporter &reporter) {
+  // Verifies UDP receive dispatch and UDP frame construction.
   reset_fake_backend();
   net_stats_reset();
   arp_cache_reset();
@@ -1262,6 +1274,7 @@ void run_udp_tests(Reporter &reporter) {
 }
 
 void run_chat_tests(Reporter &reporter) {
+  // Verifies the UDP chat inbox/history and printable-text handling.
   reset_fake_backend();
   net_stats_reset();
   arp_cache_reset();
@@ -1382,6 +1395,7 @@ void run_chat_tests(Reporter &reporter) {
 }
 
 void run_proto_tests(Reporter &reporter) {
+  // Focused protocol checks for ARP, IPv4, ICMP, and packet drops.
   reset_fake_backend();
 
   uint8_t frame[128]{};
@@ -1461,6 +1475,7 @@ void run_proto_tests(Reporter &reporter) {
 }
 
 void run_live_tests(Reporter &reporter) {
+  // Manual live window for sending host traffic to the real virtio NIC.
   reporter.check("live.ready_after_pci_init", net_ready());
   reporter.note("send host ARP/ping traffic to 10.0.2.15 during this window");
   reporter.note("inspect raw for net: virtio rx dequeue and reply tx logs");
@@ -1474,6 +1489,7 @@ void run_live_tests(Reporter &reporter) {
 }
 
 void run_real_tx_tests(Reporter &reporter) {
+  // Sends real TX frames through virtio when QEMU exposes a live NIC.
   init_frames();
 
   uint8_t out[VIRTIO_NET_MAX_FRAME_SIZE]{};
@@ -1502,6 +1518,7 @@ void run_real_tx_tests(Reporter &reporter) {
 
 void run_dual_sender(Reporter &reporter, const char *sender_text,
                      const char *responder_text) {
+  // Sender flow: trigger ARP, retry chat send, then wait for the reply.
   KPRINT("*** DUAL role    : sender\n");
   demo_ip_line("sender IP", k_dual_sender_ip);
   demo_ip_line("peer IP  ", k_dual_responder_ip);
@@ -1562,6 +1579,7 @@ void run_dual_sender(Reporter &reporter, const char *sender_text,
 
 void run_dual_responder(Reporter &reporter, const char *sender_text,
                         const char *responder_text) {
+  // Responder flow: answer ARP naturally, receive chat, then reply.
   KPRINT("*** DUAL role    : responder\n");
   demo_ip_line("responder", k_dual_responder_ip);
   demo_ip_line("peer IP  ", k_dual_sender_ip);
@@ -1595,6 +1613,7 @@ void run_dual_responder(Reporter &reporter, const char *sender_text,
 }
 
 void run_dual_live_tests(Reporter &reporter, StrongRef<Ext2> fs) {
+  // Dual demo reads role/message files from each guest disk.
   const DualRole role = read_dual_role(fs);
   if (role == DualRole::Unknown) {
     reporter.fail("dual.role_missing_or_unknown");
@@ -1648,6 +1667,7 @@ void run_dual_live_tests(Reporter &reporter, StrongRef<Ext2> fs) {
 } // namespace
 
 void net_run_selected_tests(StrongRef<Ext2> fs) {
+  // Each test image selects one case by writing net_test_case into the disk.
   char selector[k_selector_buffer_size]{};
   const NetTestCase test_case = read_test_case(fs, selector, sizeof(selector));
 

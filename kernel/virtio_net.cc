@@ -181,12 +181,12 @@ constexpr uint16_t VIRTIO_NET_RX_QUEUE = 0;
 constexpr uint16_t VIRTIO_NET_TX_QUEUE = 1;
 constexpr uint8_t VIRTIO_NET_HDR_GSO_NONE = 0;
 
-// moves to next slot in circular queue 
+// Advance one position in the fixed-size circular queue.
 uint16_t next_index(uint16_t idx) {
   return uint16_t((idx + 1) % VIRTIO_NET_QUEUE_SIZE);
 }
 
-// copies the bytes from one packet to another
+// Small local copy helper used before libc-style helpers are available here.
 void copy_bytes(uint8_t *dst, const uint8_t *src, size_t len) {
   if (len == 0) {
     return;
@@ -293,6 +293,8 @@ void add_device_status(volatile VirtioPciCommonCfg *common, uint8_t status) {
 }
 
 bool wait_for_reset(volatile VirtioPciCommonCfg *common) {
+  // After writing status=0, virtio requires the device to report reset done
+  // before the driver begins feature negotiation.
   for (uint32_t i = 0; i < 1000000; ++i) {
     if (common->device_status == 0) {
       return true;
@@ -392,6 +394,8 @@ void init_rx_buffers_locked() {
 }
 
 void init_tx_buffers_locked() {
+  // TX buffers start free. They become in-use when net_send_raw publishes them
+  // and become free again after the device writes a used-ring completion.
   g_hw.tx.avail->flags = 0;
   g_hw.tx.avail->idx = 0;
   g_hw.tx.used->flags = 0;
@@ -410,6 +414,8 @@ void init_tx_buffers_locked() {
 }
 
 void reclaim_virtio_tx_locked() {
+  // TX completion is asynchronous on real virtio. Reclaiming used entries keeps
+  // the finite TX ring from filling permanently.
   while (g_hw.tx.used_consume != g_hw.tx.used->idx) {
     uint16_t used_idx = g_hw.tx.used_consume % VIRTIO_NET_QUEUE_SIZE;
     uint16_t slot = uint16_t(g_hw.tx.used->ring[used_idx].id);
@@ -649,6 +655,7 @@ bool virtio_net_init_pci() {
 
   g_hw = {};
   PciFunction fn{};
+  // The live backend starts by finding the modern virtio-net PCI function.
   if (!pci_find_virtio_net(&fn)) {
     KPRINT("net: virtio-net PCI device not found\n");
     return false;
@@ -681,6 +688,7 @@ bool virtio_net_init_pci() {
   add_device_status(common, VIRTIO_STATUS_ACKNOWLEDGE);
   add_device_status(common, VIRTIO_STATUS_DRIVER);
 
+  // Negotiate only the features this driver actually implements.
   uint64_t offered = read_device_features(common);
   if ((offered & VIRTIO_F_VERSION_1) == 0) {
     KPRINT("net: virtio device does not offer VERSION_1\n");
@@ -825,7 +833,7 @@ bool net_send_raw(const uint8_t *data, size_t len) {
   return true;
 }
 
-// dequeues recieved packet from rx virtio queue and is copied into out
+// Dequeue one received raw Ethernet frame into out.
 int net_recv_raw(uint8_t *out, size_t max_len) {
   // Returning 0 for "no packet available" keeps polling protocol tests simple
   // and avoids treating an empty RX queue as an error.
@@ -889,6 +897,7 @@ int net_recv_raw(uint8_t *out, size_t max_len) {
 
 // Simulate a device receive completion by pushing a filled slot into rx_used.
 bool net_fake_inject_rx(const uint8_t *data, size_t len) {
+  // Tests use this helper to act like the NIC completed an RX descriptor.
   if (data == nullptr || len == 0 || len > VIRTIO_NET_MAX_FRAME_SIZE) {
     return false;
   }
@@ -926,6 +935,7 @@ bool net_fake_inject_rx(const uint8_t *data, size_t len) {
 }
 
 bool net_copy_last_tx_for_test(uint8_t *out, size_t *len_in_out) {
+  // Tests inspect the most recent fake TX frame to verify protocol output.
   if (out == nullptr || len_in_out == nullptr) {
     return false;
   }
@@ -940,7 +950,7 @@ bool net_copy_last_tx_for_test(uint8_t *out, size_t *len_in_out) {
   return true;
 }
 
-// prints out the frame buffer stuff or packet essentially into good format
+// Print the first part of a frame in hex-like bytes for debugging.
 void net_debug_dump_frame(const uint8_t *data, size_t len) {
   if (data == nullptr || len == 0) {
     return;

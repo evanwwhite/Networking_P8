@@ -13,6 +13,7 @@
 namespace {
 
 SpinLock g_chat_lock{};
+// History keeps recent messages for debugging; inbox tracks unread messages.
 ChatMessage g_history[NET_CHAT_HISTORY_SIZE]{};
 ChatMessage g_inbox[NET_CHAT_HISTORY_SIZE]{};
 uint8_t g_history_next = 0;
@@ -61,6 +62,7 @@ std::size_t sanitize_cstr(char *out, const char *text) {
 }
 
 void store_message_locked(const ChatMessage &message) {
+  // Caller holds g_chat_lock.
   g_history[g_history_next] = message;
   g_history_next = uint8_t((g_history_next + 1) % NET_CHAT_HISTORY_SIZE);
   if (g_history_count < NET_CHAT_HISTORY_SIZE) {
@@ -68,6 +70,7 @@ void store_message_locked(const ChatMessage &message) {
   }
 
   if (g_inbox_count == NET_CHAT_HISTORY_SIZE) {
+    // Drop the oldest unread message when the fixed inbox is full.
     g_inbox_read = uint8_t((g_inbox_read + 1) % NET_CHAT_HISTORY_SIZE);
     --g_inbox_count;
   }
@@ -125,6 +128,7 @@ bool net_chat_send(const uint8_t dst_ip[4], const char *text) {
     return false;
   }
 
+  // Sanitize before sending so the receiver and serial log see printable text.
   char sanitized[NET_CHAT_TEXT_SIZE]{};
   std::size_t len = sanitize_cstr(sanitized, text);
   if (len == 0) {
@@ -146,6 +150,7 @@ bool net_chat_recv(char *out, std::size_t max_len) {
     return false;
   }
 
+  // Pop from the unread inbox; history remains intact for print_history().
   ChatMessage message = g_inbox[g_inbox_read];
   g_inbox[g_inbox_read] = {};
   g_inbox_read = uint8_t((g_inbox_read + 1) % NET_CHAT_HISTORY_SIZE);
@@ -161,6 +166,7 @@ bool net_chat_recv(char *out, std::size_t max_len) {
 }
 
 bool net_chat_poll() {
+  // Register the chat handler lazily, then process one network frame.
   if (!net_chat_init()) {
     return false;
   }
@@ -171,6 +177,7 @@ void net_chat_print_history() {
   LockGuard guard{g_chat_lock};
   KPRINT("chat: history\n");
 
+  // When wrapped, start at the oldest retained history entry.
   uint8_t start = 0;
   if (g_history_count == NET_CHAT_HISTORY_SIZE) {
     start = g_history_next;
