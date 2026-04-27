@@ -25,6 +25,17 @@ The sender resolves the responder with ARP, sends `hello from sender` over UDP p
 - `run_dual_qemu`: local two-QEMU socket-network demo runner.
 - `run_dual_qemu_docker`: Docker/Podman wrapper for the same demo.
 
+## Review Guide
+
+For a quick review, start with:
+
+1. `REPORT.txt` for the final project summary, design notes, limitations, and verification notes.
+2. `README.md` for the current run/test instructions.
+3. `kernel/virtio_net.cc` and `kernel/virtio_net.h` for the raw NIC interface and virtio-net backend.
+4. `kernel/net_proto.cc`, `kernel/arp_cache.cc`, `kernel/udp.cc`, and `kernel/net_chat.cc` for the protocol stack and chat demo.
+5. `kernel/virtio_net_tests.cc` for the networking test harness.
+6. `net_dual_demo.md` and `run_dual_qemu_docker` for the two-machine demo.
+
 ## Requirements
 
 For local builds, use the course toolchain/environment expected by the original OS project. The Docker demo also requires Docker or Podman on the host.
@@ -67,12 +78,25 @@ chmod +x ./run_dual_qemu
 Useful networking tests:
 
 ```sh
+make -s net_smoke.test
+make -s net_tx.test
+make -s net_rx.test
+make -s net_queue.test
+make -s net_debug.test
 make -s net_stats.test
 make -s net_arp_cache.test
 make -s net_udp.test
 make -s net_chat.test
 make -s net_proto.test
 make -s net_demo.test
+```
+
+Live/demo-oriented tests and runners:
+
+```sh
+make -s net_real_tx.test
+make -s net_live.test
+./run_dual_qemu_docker
 ```
 
 If test directories or generated disk images were changed, run a clean rebuild first:
@@ -99,6 +123,8 @@ Edit `chat_send` to change what a VM sends. Keep the peer `chat_expect` file in 
 - `net_demo.md`: deterministic fake-backend protocol demo.
 - `net_dual_demo.md`: two-QEMU chat demo details.
 - `net_stats.md`, `net_arp_cache.md`, `net_udp.md`, `net_chat.md`: focused test descriptions.
+
+`REPORT.txt` is intentionally kept even though this README summarizes the project. The README is the repo entry point; `REPORT.txt` is the fuller final-project writeup.
 
 ## Known Limitations
 
