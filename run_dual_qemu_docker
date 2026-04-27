@@ -2,9 +2,28 @@
 set -euo pipefail
 
 image="${DUAL_QEMU_DOCKER_IMAGE:-networking-p8-dual}"
+container_cmd="${DUAL_QEMU_CONTAINER_CMD:-docker}"
 
-docker build -f Dockerfile.dual -t "${image}" .
-docker run --rm \
+if ! command -v "${container_cmd}" >/dev/null 2>&1; then
+  if [[ "${container_cmd}" == "docker" ]] && command -v podman >/dev/null 2>&1; then
+    container_cmd=podman
+  else
+    echo "error: ${container_cmd} is not installed or not on PATH" >&2
+    echo "install Docker, or set DUAL_QEMU_CONTAINER_CMD=podman if Podman is available" >&2
+    exit 127
+  fi
+fi
+
+# Git Bash/MSYS rewrites POSIX-looking arguments like /work into a host path
+# under the Git installation. Disable that conversion for Docker CLI args.
+if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* ]]; then
+  export MSYS_NO_PATHCONV=1
+  export MSYS2_ARG_CONV_EXCL="*"
+fi
+
+"${container_cmd}" build -f Dockerfile.dual -t "${image}" .
+"${container_cmd}" run --rm \
+  --network none \
   --user "$(id -u):$(id -g)" \
   -v "$PWD:/work" \
   -w /work \

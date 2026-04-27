@@ -12,17 +12,18 @@ TAP, `/dev/net/tun`, host forwarding, or privileged host networking.
   `hello from responder`
 - the sender receives the reply and prints `PASS dual chat`
 
-Run it with:
+The demo messages come from simple command files on each guest disk:
 
-```sh
-chmod +x ./run_dual_qemu
-./run_dual_qemu
-```
+- `net_dual_sender.dir/chat_send`
+- `net_dual_sender.dir/chat_expect`
+- `net_dual_responder.dir/chat_send`
+- `net_dual_responder.dir/chat_expect`
 
-The script verifies both raw logs and exits nonzero if any expected chat line is
-missing.
+Edit the `chat_send` files to change what each VM sends. Keep each peer's
+`chat_expect` file in sync with the message it should receive so the automated
+demo can still verify the exchange.
 
-To run the same socket-only demo inside Docker:
+The blessed entry point for the messaging demo is the Docker wrapper:
 
 ```sh
 chmod +x ./run_dual_qemu_docker
@@ -32,9 +33,44 @@ chmod +x ./run_dual_qemu_docker
 The Docker runner builds `Dockerfile.dual`, mounts this repo at `/work`, and
 runs `./run_dual_qemu` inside the container. The two QEMU processes communicate
 through `127.0.0.1:${DUAL_QEMU_PORT:-12345}` inside the container, so TAP is not
-required.
+required. The wrapper uses Docker by default and can be pointed at Podman with
+`DUAL_QEMU_CONTAINER_CMD=podman`.
+
+Expected final terminal output:
+
+```text
+dual chat verification: pass
+```
 
 After it exits, inspect:
 
 - `net_dual_sender.raw`
 - `net_dual_responder.raw`
+
+The sender log should include:
+
+```text
+*** DUAL sender : ARP resolved 10.0.2.15
+*** DUAL sender : chat TX "hello from sender"
+*** DUAL sender : chat RX from 10.0.2.15 "hello from responder"
+*** DUAL sender : PASS dual chat
+*** SUMMARY failures=0
+```
+
+The responder log should include:
+
+```text
+*** DUAL responder : chat RX from 10.0.2.21 "hello from sender"
+*** DUAL responder : chat TX "hello from responder"
+*** SUMMARY failures=0
+```
+
+For local runs without Docker:
+
+```sh
+chmod +x ./run_dual_qemu
+./run_dual_qemu
+```
+
+The script verifies both raw logs and exits nonzero if any expected chat line is
+missing.

@@ -65,6 +65,9 @@ import sys
 
 ansi = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
+def command_text(path: str) -> str:
+    return Path(path).read_text(errors="ignore").strip()
+
 def clean(path: str) -> str:
     text = Path(path).read_text(errors="ignore")
     text = text.replace("\x1bc", "")
@@ -72,15 +75,17 @@ def clean(path: str) -> str:
 
 sender = clean("net_dual_sender.raw")
 responder = clean("net_dual_responder.raw")
+sender_text = command_text("net_dual_sender.dir/chat_send")
+responder_text = command_text("net_dual_responder.dir/chat_send")
 
 checks = [
     ("sender", "*** DUAL sender : ARP resolved 10.0.2.15", sender),
-    ("sender", '*** DUAL sender : chat TX "hello from sender"', sender),
-    ("sender", '*** DUAL sender : chat RX from 10.0.2.15 "hello from responder"', sender),
+    ("sender", f'*** DUAL sender : chat TX "{sender_text}"', sender),
+    ("sender", f'*** DUAL sender : chat RX from 10.0.2.15 "{responder_text}"', sender),
     ("sender", "*** DUAL sender : PASS dual chat", sender),
     ("sender", "*** SUMMARY failures=0", sender),
-    ("responder", '*** DUAL responder : chat RX from 10.0.2.21 "hello from sender"', responder),
-    ("responder", '*** DUAL responder : chat TX "hello from responder"', responder),
+    ("responder", f'*** DUAL responder : chat RX from 10.0.2.21 "{sender_text}"', responder),
+    ("responder", f'*** DUAL responder : chat TX "{responder_text}"', responder),
     ("responder", "*** SUMMARY failures=0", responder),
 ]
 

@@ -1,0 +1,121 @@
+(1) What is your team name?
+
+The Brads
+
+(2) Who are the members (1-4)?
+
+Evan White, William Yen, Damian Martinez
+
+(3) Will you be integrating your work with other teams?
+
+No
+
+(4) Describe what you plan to do
+
+We plan to implement network support in our OS by adding a NIC driver that can detect and initialize the network device in QEMU, set up the RX and TX rings, and send and receive raw Ethernet frames. Once that basic driver path is working, we want to build enough support on top of it to implement ping.
+
+In other words, our main goal is to get the OS to communicate through the NIC reliably,
+Then use that foundation to send and receive the packets needed for a simple network protocol demo.
+
+(5) What design alternatives did you consider?
+
+We mainly considered two design choices. The first was whether to target an E1000 NIC or virtio-net in QEMU.
+E1000 seemed like a straightforward option because it is common in OS projects,
+while virtio-net seemed appealing because it is a newer option and was mentioned as a possible alternative in office hours.
+We also talked about how much networking to take on beyond the driver itself.
+
+The other big choice was scope. One option was to stop after getting the NIC driver working with raw
+Ethernet send and receive. The other was to use that as the base and then build enough protocol support on
+top of it to get something like ping working. We also considered trying to do more of the networking stack,
+but that seemed too large for the time we have, so the main alternatives were really the NIC choice
+and how far up the stack to go.
+
+(6) Which design did you pick? Why?
+
+We decided to go with virtio-net and build the project around getting the NIC driver working first,
+then implementing ping on top of it. Our plan is to detect and initialize the virtio network device in QEMU, set up the RX and TX rings, and make raw Ethernet send and receive work. After that foundation is working,
+we want to add the protocol support needed for ping so we can show actual end-to-end network communication.
+
+We picked this design because it gives us a clear path and keeps the project focused. The driver is the base of everything,
+so it makes sense to get the hardware communication working before trying to build higher-level networking on top of it.
+We also chose this direction because ping gives us a concrete and meaningful demo instead of stopping at just raw frame handling.
+
+
+(7) What did you learn so far?
+
+So far, we learned that this project made syscalls make a lot more sense.
+Before, they felt kind of abstract, but networking gave us a clear example of why they matter.
+A normal user program should not be able to talk to the network card directly, so the kernel has to be the middle layer.
+That helped us understand syscalls as the way a program asks the OS to do hardware-related work safely.
+
+We also learned more clearly what the driver is responsible for. In this project, the driver is what lets the OS detect the NIC,
+initialize it, and handle sending and receiving data through it. We also learned that there are different layers to networking.
+First, the low-level driver work has to function, like RX/TX rings and raw Ethernet. Then, on top of that, there is protocol support.
+So one thing we learned is that a networking project is not just “make packets work,” but also understanding how the lower-level hardware
+side connects to higher-level protocols.
+
+
+(8) Reference any documents, code snippets, prototype you think is relevant
+We think the main documents relevant to our project are the Virtio 1.2 specification for understanding how the virtio network device and queues work, RFC 791 for the IPv4 packet format, and RFC 792 for ICMP since that is what ping uses. If we end up needing it, RFC 826 for ARP could also be useful.
+
+Virtio 1.2 spec: https://docs.oasis-open.org/virtio/virtio/v1.2/virtio-v1.2.html
+RFC 791 (IPv4): https://www.rfc-editor.org/rfc/rfc791
+RFC 792 (ICMP): https://www.rfc-editor.org/rfc/rfc792
+RFC 826 (ARP, only if needed): https://www.rfc-editor.org/rfc/rfc826
+
+The main files we expect to work with are :
+virtio_net.h - In this file, we define the core driver structures, necessary constants, and helper functions required for the virtio network device to function correctly.
+virtio_net.cc - Implements NIC detection, initialization, RX/TX queue setup, and raw frame send/receive.
+ethernet.h - Defines Ethernet frame structures and constants used for raw packet handling.
+arp.h - Defines ARP packet structures and constants.
+arp.cc - Implements ARP parsing and ARP reply handling.
+ipv4.h - Defines IPv4 packet structures, constants, and helpers.
+icmp.h - Defines ICMP packet structures and constants for ping.
+ipv4_icmp.cc - Implements IPv4/ICMP handling, including replying to ping requests.
+pcie.cc / pcie.h - Small PCI changes to help find the virtio network device and read its BAR/MMIO info.
+
+
+
+
+
+
+
+
+
+PROJECT OUTLINE OF RESPONSIBILITIES:
+Person 1 — Device bring-up and NIC initialization Own the hardware-facing part of the project. Your job is to make the OS find the virtio-net device in QEMU and initialize it correctly so the rest of the network stack has something usable to talk to. Responsibilities:
+detect the network device on PCI
+identify the virtio-net device
+handle device initialization and status setup
+negotiate needed features
+expose a small interface like nic_init() and nic_ready()
+Done condition:
+the OS can detect the NIC
+the NIC initializes without crashing
+the rest of the team can call into a clean driver interface
+
+Person 2 — RX/TX rings and raw packet movement Own the data movement layer. Your job is to make packets actually move between the OS and the NIC by setting up and managing the receive and transmit paths. Responsibilities:
+build and manage RX ring buffers
+build and manage TX ring buffers
+manage descriptors/buffers for packet send and receive
+implement functions like net_send_raw(...) and net_recv_raw(...)
+add debugging output for sent/received raw frames
+Done condition:
+raw Ethernet frames can be sent
+raw Ethernet frames can be received
+packet movement works through a clean interface that higher layers can use
+
+Person 3 — Ping logic, protocol layer, and demo/testing Own the meaning of the network communication. Your job is to build the minimum protocol support needed to turn raw frames into a working ping demo. Responsibilities:
+define Ethernet/ARP/IP/ICMP packet handling as needed
+build ping request and reply logic
+parse incoming raw frames
+connect protocol code to the raw packet interface
+create the final demo/test flow and expected output
+Done condition:
+the OS can construct the packets needed for ping
+incoming frames can be interpreted correctly
+the final demo shows real end-to-end network communication
+Shared rule for everyone: We should agree early on a small interface between layers so we can work in parallel and merge later:
+Person 1 provides NIC setup
+Person 2 provides raw send/receive
+Person 3 builds ping on top of raw frames

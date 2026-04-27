@@ -1496,7 +1496,8 @@ void run_real_tx_tests(Reporter &reporter) {
                     net_recv_raw(out, sizeof(out)), 0);
 }
 
-void run_dual_sender(Reporter &reporter) {
+void run_dual_sender(Reporter &reporter, const char *sender_text,
+                     const char *responder_text) {
   KPRINT("*** DUAL role    : sender\n");
   demo_ip_line("sender IP", k_dual_sender_ip);
   demo_ip_line("peer IP  ", k_dual_responder_ip);
@@ -1509,7 +1510,7 @@ void run_dual_sender(Reporter &reporter) {
   }
 
   reporter.check("dual.sender.chat_first_send_pending",
-                 !net_chat_send(k_dual_responder_ip, k_dual_chat_sender_text));
+                 !net_chat_send(k_dual_responder_ip, sender_text));
 
   uint8_t learned_mac[6]{};
   bool arp_resolved = false;
@@ -1528,10 +1529,10 @@ void run_dual_sender(Reporter &reporter) {
     KPRINT("*** DUAL sender : ARP resolved 10.0.2.15\n");
   }
 
-  bool sent_chat = net_chat_send(k_dual_responder_ip, k_dual_chat_sender_text);
+  bool sent_chat = net_chat_send(k_dual_responder_ip, sender_text);
   reporter.check("dual.sender.chat_tx", sent_chat);
   if (sent_chat) {
-    KPRINT("*** DUAL sender : chat TX \"?\"\n", k_dual_chat_sender_text);
+    KPRINT("*** DUAL sender : chat TX \"?\"\n", sender_text);
   }
 
   char chat_reply[NET_CHAT_TEXT_SIZE]{};
@@ -1539,7 +1540,7 @@ void run_dual_sender(Reporter &reporter) {
   until = Pit::jiffies + 5000;
   while (Pit::jiffies < until) {
     if (net_chat_poll() && net_chat_recv(chat_reply, sizeof(chat_reply)) &&
-        strings_equal(chat_reply, k_dual_chat_responder_text)) {
+        strings_equal(chat_reply, responder_text)) {
       saw_chat_reply = true;
       break;
     }
@@ -1555,7 +1556,8 @@ void run_dual_sender(Reporter &reporter) {
   net_stats_print();
 }
 
-void run_dual_responder(Reporter &reporter) {
+void run_dual_responder(Reporter &reporter, const char *sender_text,
+                        const char *responder_text) {
   KPRINT("*** DUAL role    : responder\n");
   demo_ip_line("responder", k_dual_responder_ip);
   demo_ip_line("peer IP  ", k_dual_sender_ip);
@@ -1569,14 +1571,13 @@ void run_dual_responder(Reporter &reporter) {
   while (Pit::jiffies < until) {
     if (net_chat_poll()) {
       if (!saw_chat && net_chat_recv(text, sizeof(text)) &&
-          strings_equal(text, k_dual_chat_sender_text)) {
+          strings_equal(text, sender_text)) {
         saw_chat = true;
         KPRINT("*** DUAL responder : chat RX from 10.0.2.21 \"?\"\n", text);
         sent_chat_reply =
-            net_chat_send(k_dual_sender_ip, k_dual_chat_responder_text);
+            net_chat_send(k_dual_sender_ip, responder_text);
         if (sent_chat_reply) {
-          KPRINT("*** DUAL responder : chat TX \"?\"\n",
-                 k_dual_chat_responder_text);
+          KPRINT("*** DUAL responder : chat TX \"?\"\n", responder_text);
         }
       }
       continue;
@@ -1596,6 +1597,35 @@ void run_dual_live_tests(Reporter &reporter, StrongRef<Ext2> fs) {
     return;
   }
 
+  char chat_send[NET_CHAT_TEXT_SIZE]{};
+  char chat_expect[NET_CHAT_TEXT_SIZE]{};
+  if (!read_named_file(fs, "chat_send", chat_send, sizeof(chat_send))) {
+    if (role == DualRole::Sender) {
+      copy_bytes_local(reinterpret_cast<uint8_t *>(chat_send),
+                       reinterpret_cast<const uint8_t *>(
+                           k_dual_chat_sender_text),
+                       sizeof(k_dual_chat_sender_text));
+    } else {
+      copy_bytes_local(reinterpret_cast<uint8_t *>(chat_send),
+                       reinterpret_cast<const uint8_t *>(
+                           k_dual_chat_responder_text),
+                       sizeof(k_dual_chat_responder_text));
+    }
+  }
+  if (!read_named_file(fs, "chat_expect", chat_expect, sizeof(chat_expect))) {
+    if (role == DualRole::Sender) {
+      copy_bytes_local(reinterpret_cast<uint8_t *>(chat_expect),
+                       reinterpret_cast<const uint8_t *>(
+                           k_dual_chat_responder_text),
+                       sizeof(k_dual_chat_responder_text));
+    } else {
+      copy_bytes_local(reinterpret_cast<uint8_t *>(chat_expect),
+                       reinterpret_cast<const uint8_t *>(
+                           k_dual_chat_sender_text),
+                       sizeof(k_dual_chat_sender_text));
+    }
+  }
+
   net_stats_reset();
   arp_cache_reset();
   udp_clear_handlers();
@@ -1603,12 +1633,12 @@ void run_dual_live_tests(Reporter &reporter, StrongRef<Ext2> fs) {
 
   if (role == DualRole::Sender) {
     net_set_identity(k_dual_sender_mac, k_dual_sender_ip);
-    run_dual_sender(reporter);
+    run_dual_sender(reporter, chat_send, chat_expect);
     return;
   }
 
   net_set_identity(k_dual_responder_mac, k_dual_responder_ip);
-  run_dual_responder(reporter);
+  run_dual_responder(reporter, chat_expect, chat_send);
 }
 
 } // namespace

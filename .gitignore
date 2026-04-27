@@ -1,0 +1,14 @@
+build/
+*.cycles
+*.data
+*.debug
+*.diff
+*.failure
+*.img
+*.out
+*.raw
+*.result
+*.time
+*.dir/init
+*.dir/*.d
+*.dir/*.o

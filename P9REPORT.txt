@@ -1,0 +1,82 @@
+(1) What is your team name?
+
+The Brads
+
+(2) Who are the members?
+
+Evan White, William Yen, Damian Martinez
+
+(3) What did you originally plan to do?
+
+We originally planned to add network support to the OS by implementing a virtio-net NIC driver in QEMU. The first goal was raw Ethernet send/receive through RX and TX queues. If that worked, we planned to add enough ARP/IPv4/ICMP support to demonstrate ping.
+
+(4) What did you end up doing?
+
+We got the virtio-net path working and built more protocol support on top of it than the original minimum. The project now has raw packet movement, Ethernet dispatch, ARP, IPv4, ICMP, UDP, packet statistics, and a small UDP chat layer.
+
+Our final demo boots two QEMU instances connected through QEMU socket networking. The sender resolves the responder with ARP, sends a UDP chat message, the responder receives it and replies, and the sender verifies the reply with `PASS dual chat`.
+
+(5) What did you learn in the process?
+
+We learned how much work sits between "the OS has a NIC" and "a program can communicate." The driver needs PCI discovery, virtio feature negotiation, queue setup, packet buffers, and correct virtio-net headers before higher-level packets even make sense.
+
+We also learned that layering matters. Keeping raw Ethernet, ARP, IPv4/ICMP, UDP, and chat code separated made testing and debugging much easier.
+
+(6) How would you do things differently knowing what you know now?
+
+We would start with the two-VM demo setup earlier instead of waiting until late in the project. Fake backend tests were useful, but live QEMU-to-QEMU traffic exposed issues that unit tests did not, such as the virtio-net header layout bug.
+
+We would also add ARP pending/rate-limit tracking earlier so the logs are less noisy while waiting for a reply.
+
+(7) How can we reproduce your results?
+  - instructions on how to build and run your code
+  - links to documents
+  - …
+
+Main demo:
+
+```
+chmod +x ./run_dual_qemu_docker
+./run_dual_qemu_docker
+```
+
+Expected final terminal output:
+
+```
+dual chat verification: pass
+```
+
+Useful logs after the run:
+
+```
+net_dual_sender.raw
+net_dual_responder.raw
+```
+
+The sender log should include `PASS dual chat` and `SUMMARY failures=0`. The responder log should include receiving `"hello from sender"`, sending `"hello from responder"`, and `SUMMARY failures=0`.
+
+Focused tests:
+
+```
+make -s net_stats.test
+make -s net_arp_cache.test
+make -s net_udp.test
+make -s net_chat.test
+make -s net_proto.test
+make -s net_demo.test
+```
+
+Relevant documents:
+
+```
+REPORT.txt
+NETWORKING_PART1.md
+net_demo.md
+net_dual_demo.md
+```
+
+(8) any other comments, observations, etc?
+
+The final demo uses QEMU socket networking instead of TAP so it can run without `/dev/net/tun`, host bridge setup, or privileged host networking. Docker is used as the preferred wrapper because it makes the two-QEMU demo easier to reproduce.
+
+Known limitations: UDP checksums are not implemented, the chat demo is scripted instead of interactive, and the dual-machine test currently verifies one request/reply exchange rather than a long conversation.
