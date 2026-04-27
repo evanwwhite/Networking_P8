@@ -1,196 +1,112 @@
-Due date:
-    4/10/2026 @ 11:59pm (test and t0)
-    4/13/2026 @ 11:59pm (everything working)
+# Networking P8/P9 OS Project
 
-Important:
-~~~~~~~~~~
+AI assistance note: AI was used as a development aid for planning, debugging, review, and documentation. The team reviewed the output and is responsible for the submitted work.
 
-Remember to run "make clean" when you make any changes to the test
-directory.
+## Overview
 
-You have more freedom in changing the kernel implementation. See below for
-details.
+This repository contains a small teaching OS extended with virtio-net networking support. The final networking project builds a raw Ethernet path, adds ARP/IPv4/ICMP/UDP protocol support, and demonstrates UDP chat between two QEMU guests connected through QEMU socket networking.
 
+The main demo boots two copies of the OS:
 
-Assignment:
-~~~~~~~~~~~
+- sender: MAC `52:54:00:12:34:57`, IP `10.0.2.21`
+- responder: MAC `52:54:00:12:34:56`, IP `10.0.2.15`
 
-- Go to user mode
-- Implement the required system calls
-- Donate a test case (<csid>.dir, <csid>.md, <csid>.ok)
+The sender resolves the responder with ARP, sends `hello from sender` over UDP port `4390`, the responder replies with `hello from responder`, and the sender verifies the exchange with `PASS dual chat`.
 
-Simplifications:
-~~~~~~~~~~~~~~~~
+## Major Components
 
-Schedule limitations forced the following simplifcations (wouldn't be there
-if we had the full 10 days):
+- `kernel/virtio_net.*`: virtio-net driver, raw Ethernet send/receive API, fake backend, and live PCI virtio backend.
+- `kernel/net_proto.*`: Ethernet dispatch, ARP, IPv4, and ICMP handling.
+- `kernel/arp_cache.*`: fixed-size ARP cache used by IPv4 sending.
+- `kernel/udp.*`: UDP parsing, handler registration, dispatch, and transmit support.
+- `kernel/net_chat.*`: small UDP chat layer used by the two-machine demo.
+- `kernel/net_stats.*`: packet and drop counters for debugging/tests.
+- `kernel/virtio_net_tests.*`: focused networking test harness.
+- `run_dual_qemu`: local two-QEMU socket-network demo runner.
+- `run_dual_qemu_docker`: Docker/Podman wrapper for the same demo.
 
-* preemption is disabled
-* demand paging is not required
+## Requirements
 
-Rationale: saves the time needed to learn and debug the details of some x86-64
-           features (The TSS)
+For local builds, use the course toolchain/environment expected by the original OS project. The Docker demo also requires Docker or Podman on the host.
 
-System calls to implement:
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+The dual-QEMU demo intentionally uses QEMU socket networking instead of TAP, so it does not require `/dev/net/tun`, host bridge setup, or privileged host networking.
 
-We will implement a simplified subset of the Linux system calls; using the same
-linkage convention (syscall/sysret, %rax contains syscall number, ...).
+## Run the Main Demo
 
-Looks at https://filippo.io/linux-syscall-table/ for a convenient listing of
-the Linux sys calls.
+Preferred containerized run:
 
-Keep in mind the slight differences between a system call and its libc
-wrapper; the kernel implements the system call and libc.h/... implement
-the wrapper.
+```sh
+chmod +x ./run_dual_qemu_docker
+./run_dual_qemu_docker
+```
 
-Ignore all uses of permissions and times
+Expected final output:
 
-We will implement:
+```text
+dual chat verification: pass
+```
 
-- open (ignoring all args except for path)
-- read
-- write (all writes go to the console)
-- close
-- lseek (no support for SEEK_HOME and SEEK_DATA)
-- brk (read the comment about syscall vs. library function, you need to implement
-       the syscall)
-- sched_yield
-- exit
-- fork (our kernel will implement fork directly; not as a special case of clone)
-- semget (nsems must be 1)
-- semop (ignore NO_WAIT flag)
-- semctl (the only supported operation is IPC_RMID)
-- waitpid
+After the run, inspect these logs if needed:
 
+```text
+net_dual_sender.raw
+net_dual_responder.raw
+```
 
+The sender log should include `PASS dual chat` and `SUMMARY failures=0`. The responder log should include receiving `hello from sender`, sending `hello from responder`, and `SUMMARY failures=0`.
 
-Attacks:
-~~~~~~~~
+For a local run without Docker:
 
-Try to come up with a test case that exploits vulnabilities in the given code.
+```sh
+chmod +x ./run_dual_qemu
+./run_dual_qemu
+```
 
-Hint: running syscalls on the user stack.
+## Focused Tests
 
+Useful networking tests:
 
-What can you change:
-~~~~~~~~~~~~~~~~~~~~
+```sh
+make -s net_stats.test
+make -s net_arp_cache.test
+make -s net_udp.test
+make -s net_chat.test
+make -s net_proto.test
+make -s net_demo.test
+```
 
-- The kernel is yours, you can do anything with it as long as:
+If test directories or generated disk images were changed, run a clean rebuild first:
 
-     * you leave the Makefile's alone
-     * you leave the kernel link script alone
-     * it continues to implement preemptive multi-threading with
-       the informal liveness semantics:
-            o All cores get to participate
-            o All threads get a fair share of resources
-     * it adheres to the user contract:
-            o The virtual address space structure
-            o Protects the kernel from user processes
-            o Protects user processes from each other
-            o Implements the system call semantics
-            o Bootstraps the process tree from /init
+```sh
+make -s clean net_chat.test
+```
 
-The given code:
-~~~~~~~~~~~~~~~
+## Demo Message Files
 
-There is enough code in kernel/ to bootstrap the first user process but:
+The two-QEMU chat demo reads simple command files from each guest directory:
 
-     o The file system and virtual memory implementations are incomplete
-        and in some places incorrect (e.g. look for prints tagged with
-        FIXME). You are responsible for making them work.
+- `net_dual_sender.dir/chat_send`
+- `net_dual_sender.dir/chat_expect`
+- `net_dual_responder.dir/chat_send`
+- `net_dual_responder.dir/chat_expect`
 
-     o You can use any parts of the code you want for this (and future)
-       assignments but you can't copy it in late submissions for previous
-       assignments.
+Edit `chat_send` to change what a VM sends. Keep the peer `chat_expect` file in sync so the automated verification still passes.
 
-     o You need to understand everything you submit.
+## Documentation
 
-Details:
-~~~~~~~~
+- `REPORT.txt`: final project report and implementation summary.
+- `NETWORKING_PART1.md`: virtio-net PCI/device bring-up notes.
+- `net_demo.md`: deterministic fake-backend protocol demo.
+- `net_dual_demo.md`: two-QEMU chat demo details.
+- `net_stats.md`, `net_arp_cache.md`, `net_udp.md`, `net_chat.md`: focused test descriptions.
 
-(1) kernel_main mounts the ext2 file system in drive #1
+## Known Limitations
 
-(2) it looks for a file named /init
+- UDP checksums are intentionally set to zero for this project stage.
+- The chat demo is scripted rather than interactive.
+- ARP behavior can be noisy while waiting for resolution; a future version should track pending ARP requests or rate-limit repeated requests.
+- The dual-machine regression verifies one request/reply exchange rather than a long conversation.
 
-(3) it loads it in user memory
+## Repository Hygiene
 
-    It should reject any non-ELF files or an ELF file that tries to load
-    a program outside the user range
-
-(4) it switches to user mode and starts running the user process at the
-    program entry point
-
-(5) the kernel should protect all its resources from the user program
-
-(6) Look in t0.dir/machins.S for examples of user-side syscall stubs
-
-(7) System calls to implement:
-
-Most of our system calls are modelled after their Linux counterparts (some
-with minor simplifications). To learn about a Linux system call (e.g. fork),
-you can login into a CS machine and type:
-
-    man 2 fork  # or use google, chatgpt, ...
-
-
-Testcase:
-~~~~~~~~~
-
-Your testcase consists of a <csid>.dir, <csid>.ok, and a <csid>.md (optional)
-Your .dir should contain a /sbin/init, where init is the compiled ELF file that needs to be run.
-Your .md is a markdown file which describes what your testcase is doing.
-- Specify exactly what your testcase tests (e.g. a list of syscalls, what it stresses, etc.)
-- Summarize how your testcase helps you test the things above. (Be relatively concise here)
-- (Optional) Describe in detail what your testcase does (You can have a more extended description here)
-If you choose to write your testcase in a language not commonly used or difficult to read,
-you should write an extended description in your markdown file.
-
-"Common" languages (everyone in this class has used these):
-- C
-- C++
-- Java
-
-files:
-~~~~~~
-
-- kernel/          contains the kernel files
-
-- <test>.md        the README containing a description of the testcase
-
-- <test>.dir/      the contents of the root disk
-
-- <test>.dir/
-    init           ... the elf init file packaged in t0.img
-
-for makefile help:
-~~~~~~~~~~~~~~~~~~
-
-    make help
-
-to run test:
-~~~~~~~~~~~~
-
-    make -s clean test
-
-to run one test:
-~~~~~~~~~~~~~~~~
-
-    make -s t0.test
-
-To make the output more noisy:
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    make clean test
-
-To run by hand
-~~~~~~~~~~~~~~
-
-    ./run_qemu t0
-
-To attach with gdb
-~~~~~~~~~~~~~~~~~~
-
-    ./debug_qemu t0
-
-
+Generated files should not be committed. The `.gitignore` excludes build products and run outputs such as `build/`, `*.img`, `*.data`, `*.raw`, `*.out`, `*.failure`, `*.cycles`, and `*.result`.
