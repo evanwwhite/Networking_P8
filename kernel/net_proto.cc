@@ -1,10 +1,13 @@
 #include "net_proto.h"
 
 #include "arp.h"
+#include "arp_cache.h"
 #include "ethernet.h"
 #include "icmp.h"
 #include "ipv4.h"
+#include "net_stats.h"
 #include "print.h"
+#include "udp.h"
 #include "virtio_net.h"
 
 // Convert a 16-bit value between byte orders.
@@ -178,6 +181,19 @@ static void log_ascii_payload(const char* prefix, const uint8_t* data, std::size
     KPRINT("net: ? \"?\"\n", prefix, text);
 }
 
+static void trace_mac(const char* prefix, const uint8_t mac[6]) {
+    KPRINT("net: ? ?:?:?:?:?:?\n", prefix, mac[0], mac[1], mac[2], mac[3],
+           mac[4], mac[5]);
+}
+
+static void trace_drop(const char* reason) {
+    KPRINT("net: DROP ?\n", reason);
+}
+
+static void log_ip_inline(const uint8_t ip[4]) {
+    KPRINT("?.?.?.?", Dec(ip[0]), Dec(ip[1]), Dec(ip[2]), Dec(ip[3]));
+}
+
 // Compute where the ICMP message starts inside the frame.
 // Layout is:
 // [ Ethernet header ][ IPv4 header ][ ICMP header ][ payload ]
@@ -189,16 +205,49 @@ static std::size_t icmp_offset(const Ipv4Header* ip) {
 // ARP asks: "Who has this IP address?"
 // If the question is asking for our IP, we send back our MAC address.
 static void handle_arp(const uint8_t* data, std::size_t len) {
-    if (len < sizeof(EthernetHeader) + sizeof(ArpPacket)) return;
+    if (len < sizeof(EthernetHeader) + sizeof(ArpPacket)) {
+        net_stats_increment(NetStatCounter::DroppedShort);
+        trace_drop("short ARP frame");
+        return;
+    }
 
     auto eth = reinterpret_cast<const EthernetHeader*>(data);
     auto arp = reinterpret_cast<const ArpPacket*>(data + sizeof(EthernetHeader));
+    uint16_t op = bswap16(arp->oper);
+
+    if (arp->hlen == 6 && arp->plen == 4 &&
+        bswap16(arp->htype) == ARP_HTYPE_ETHERNET &&
+        bswap16(arp->ptype) == ARP_PTYPE_IPV4) {
+        arp_cache_insert(arp->spa, arp->sha);
+    }
 
     // Only answer ARP requests, not ARP replies
-    if (bswap16(arp->oper) != ARP_OP_REQUEST) return;
+    if (op == ARP_OP_REPLY) {
+        net_stats_increment(NetStatCounter::ArpRx);
+        KPRINT("net: RX ARP reply ");
+        log_ip_inline(arp->spa);
+        KPRINT(" is-at ?:?:?:?:?:?\n", arp->sha[0], arp->sha[1], arp->sha[2],
+               arp->sha[3], arp->sha[4], arp->sha[5]);
+        return;
+    }
+
+    if (op != ARP_OP_REQUEST) {
+        return;
+    }
 
     // Only answer if the requested IP is our IP
-    if (!ip_equals(arp->tpa, g_my_ip)) return;
+    if (!ip_equals(arp->tpa, g_my_ip)) {
+        net_stats_increment(NetStatCounter::DroppedNotForMe);
+        trace_drop("ARP request for another IP");
+        return;
+    }
+
+    net_stats_increment(NetStatCounter::ArpRx);
+    KPRINT("net: RX ARP who-has ?.?.?.? from ?.?.?.?\n", Dec(arp->tpa[0]),
+           Dec(arp->tpa[1]), Dec(arp->tpa[2]), Dec(arp->tpa[3]),
+           Dec(arp->spa[0]), Dec(arp->spa[1]), Dec(arp->spa[2]),
+           Dec(arp->spa[3]));
+    trace_mac("RX ARP sender MAC", arp->sha);
 
     // Build a full Ethernet+ARP reply packet
     uint8_t reply[sizeof(EthernetHeader) + sizeof(ArpPacket)] = {};
@@ -226,29 +275,133 @@ static void handle_arp(const uint8_t* data, std::size_t len) {
     copy_bytes(out_arp->tha, arp->sha, 6);  // target hardware address = their MAC
     copy_bytes(out_arp->tpa, arp->spa, 4);  // target protocol address = their IP
 
-    net_send_raw(reply, sizeof(reply));
+    if (net_send_raw(reply, sizeof(reply))) {
+        net_stats_increment(NetStatCounter::ArpTx);
+        KPRINT("net: TX ARP reply ?.?.?.? is-at ?:?:?:?:?:?\n",
+               Dec(g_my_ip[0]), Dec(g_my_ip[1]), Dec(g_my_ip[2]),
+               Dec(g_my_ip[3]), g_my_mac[0], g_my_mac[1], g_my_mac[2],
+               g_my_mac[3], g_my_mac[4], g_my_mac[5]);
+    }
+}
+
+bool net_send_arp_request(const uint8_t target_ip[4]) {
+    if (target_ip == nullptr) {
+        return false;
+    }
+
+    uint8_t request[sizeof(EthernetHeader) + sizeof(ArpPacket)] = {};
+    auto out_eth = reinterpret_cast<EthernetHeader*>(request);
+    auto out_arp = reinterpret_cast<ArpPacket*>(request + sizeof(EthernetHeader));
+    uint8_t broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    uint8_t zero_mac[6] = {};
+
+    copy_bytes(out_eth->dst, broadcast, 6);
+    copy_bytes(out_eth->src, g_my_mac, 6);
+    out_eth->ether_type = bswap16(ETH_TYPE_ARP);
+
+    out_arp->htype = bswap16(ARP_HTYPE_ETHERNET);
+    out_arp->ptype = bswap16(ARP_PTYPE_IPV4);
+    out_arp->hlen = 6;
+    out_arp->plen = 4;
+    out_arp->oper = bswap16(ARP_OP_REQUEST);
+    copy_bytes(out_arp->sha, g_my_mac, 6);
+    copy_bytes(out_arp->spa, g_my_ip, 4);
+    copy_bytes(out_arp->tha, zero_mac, 6);
+    copy_bytes(out_arp->tpa, target_ip, 4);
+
+    if (!net_send_raw(request, sizeof(request))) {
+        return false;
+    }
+
+    net_stats_increment(NetStatCounter::ArpTx);
+    KPRINT("net: TX ARP who-has ");
+    log_ip_inline(target_ip);
+    KPRINT(" tell ");
+    log_ip_inline(g_my_ip);
+    KPRINT("\n");
+    return true;
 }
 
 // Handle IPv4 packets.
 // For this project, we only care about ICMP ping requests.
 static void handle_ipv4(const uint8_t* data, std::size_t len) {
-    if (len < sizeof(EthernetHeader) + sizeof(Ipv4Header)) return;
+    if (len < sizeof(EthernetHeader) + sizeof(Ipv4Header)) {
+        net_stats_increment(NetStatCounter::DroppedShort);
+        trace_drop("short IPv4 frame");
+        return;
+    }
 
     auto eth = reinterpret_cast<const EthernetHeader*>(data);
     auto ip  = reinterpret_cast<const Ipv4Header*>(data + sizeof(EthernetHeader));
 
-    // Ignore packets not addressed to our IP
-    if (!ip_is_for_me(ip)) return;
-
-    // Ignore non-ICMP IPv4 packets
-    if (ip->protocol != IPV4_PROTO_ICMP) return;
-
     // Find real IPv4 header size
     std::size_t ip_hdr_len = ipv4_header_length(ip);
-    if (ip_hdr_len < sizeof(Ipv4Header)) return;
+    if (ip_hdr_len < sizeof(Ipv4Header)) {
+        net_stats_increment(NetStatCounter::DroppedShort);
+        trace_drop("bad IPv4 header length");
+        return;
+    }
+
+    if (len < sizeof(EthernetHeader) + ip_hdr_len) {
+        net_stats_increment(NetStatCounter::DroppedShort);
+        trace_drop("truncated IPv4 header");
+        return;
+    }
+
+    if (checksum16(reinterpret_cast<const uint8_t*>(ip), ip_hdr_len) != 0) {
+        net_stats_increment(NetStatCounter::DroppedBadChecksum);
+        trace_drop("bad IPv4 checksum");
+        return;
+    }
+
+    // Ignore packets not addressed to our IP
+    if (!ip_is_for_me(ip)) {
+        net_stats_increment(NetStatCounter::DroppedNotForMe);
+        trace_drop("IPv4 packet for another IP");
+        return;
+    }
+
+    net_stats_increment(NetStatCounter::Ipv4Rx);
+    KPRINT("net: RX IPv4 proto=? ?.?.?.? -> ?.?.?.?\n", Dec(ip->protocol),
+           Dec(ip->src_ip[0]), Dec(ip->src_ip[1]), Dec(ip->src_ip[2]),
+           Dec(ip->src_ip[3]), Dec(ip->dst_ip[0]), Dec(ip->dst_ip[1]),
+           Dec(ip->dst_ip[2]), Dec(ip->dst_ip[3]));
+
+    // total_length is the IPv4 packet size: [IPv4 header + ICMP + payload]
+    std::size_t ip_total_len = bswap16(ip->total_length);
+    if (ip_total_len < ip_hdr_len) {
+        net_stats_increment(NetStatCounter::DroppedShort);
+        trace_drop("bad IPv4 total length");
+        return;
+    }
+
+    // Make sure the whole IPv4 packet is actually present in the frame
+    if (sizeof(EthernetHeader) + ip_total_len > len) {
+        net_stats_increment(NetStatCounter::DroppedShort);
+        trace_drop("truncated IPv4 payload");
+        return;
+    }
+
+    if (ip->protocol == IPV4_PROTO_UDP) {
+        const uint8_t* udp_data = data + sizeof(EthernetHeader) + ip_hdr_len;
+        const std::size_t udp_len = ip_total_len - ip_hdr_len;
+        udp_handle_packet(ip->src_ip, udp_data, udp_len);
+        return;
+    }
+
+    // Ignore non-ICMP IPv4 packets until another protocol is registered.
+    if (ip->protocol != IPV4_PROTO_ICMP) {
+        net_stats_increment(NetStatCounter::DroppedUnknownIpv4Protocol);
+        trace_drop("unsupported IPv4 protocol");
+        return;
+    }
 
     // Need enough bytes for Ethernet + IPv4 + ICMP header
-    if (len < sizeof(EthernetHeader) + ip_hdr_len + sizeof(IcmpEchoHeader)) return;
+    if (ip_total_len < ip_hdr_len + sizeof(IcmpEchoHeader)) {
+        net_stats_increment(NetStatCounter::DroppedShort);
+        trace_drop("short ICMP frame");
+        return;
+    }
 
     std::size_t icmp_off = icmp_offset(ip);
     auto icmp = reinterpret_cast<const IcmpEchoHeader*>(data + icmp_off);
@@ -256,18 +409,21 @@ static void handle_ipv4(const uint8_t* data, std::size_t len) {
     // Only answer ping requests
     if (icmp->type != ICMP_ECHO_REQUEST) return;
 
-    // total_length is the IPv4 packet size: [IPv4 header + ICMP + payload]
-    std::size_t ip_total_len = bswap16(ip->total_length);
-    if (ip_total_len < ip_hdr_len + sizeof(IcmpEchoHeader)) return;
-
-    // Make sure the whole IPv4 packet is actually present in the frame
-    if (sizeof(EthernetHeader) + ip_total_len > len) return;
-
     std::size_t icmp_len = ip_total_len - ip_hdr_len;
+    if (checksum16(reinterpret_cast<const uint8_t*>(icmp), icmp_len) != 0) {
+        net_stats_increment(NetStatCounter::DroppedBadChecksum);
+        trace_drop("bad ICMP checksum");
+        return;
+    }
+
+    net_stats_increment(NetStatCounter::IcmpRx);
     std::size_t payload_len = icmp_len - sizeof(IcmpEchoHeader);
     const uint8_t* in_payload = data + icmp_off + sizeof(IcmpEchoHeader);
 
     log_ascii_payload("icmp echo payload", in_payload, payload_len);
+    KPRINT("net: RX ICMP echo id=? seq=? payload_len=?\n",
+           Dec(bswap16(icmp->identifier)), Dec(bswap16(icmp->sequence)),
+           Dec(payload_len));
 
     // Build reply in a temporary buffer.
     // 1514 is a normal Ethernet frame-sized buffer.
@@ -298,19 +454,96 @@ static void handle_ipv4(const uint8_t* data, std::size_t len) {
         bswap16(checksum16(reinterpret_cast<const uint8_t*>(out_icmp), icmp_len));
 
     // Send the finished reply frame
-    net_send_raw(reply, reply_len);
+    if (net_send_raw(reply, reply_len)) {
+        net_stats_increment(NetStatCounter::Ipv4Tx);
+        net_stats_increment(NetStatCounter::IcmpTx);
+        KPRINT("net: TX ICMP echo reply id=? seq=? payload_len=?\n",
+               Dec(bswap16(out_icmp->identifier)),
+               Dec(bswap16(out_icmp->sequence)), Dec(payload_len));
+    }
+}
+
+bool net_send_ipv4(const uint8_t dst_ip[4], uint8_t protocol,
+                   const uint8_t* payload, std::size_t payload_len) {
+    if (dst_ip == nullptr || (payload == nullptr && payload_len != 0)) {
+        return false;
+    }
+
+    const std::size_t ip_total_len = sizeof(Ipv4Header) + payload_len;
+    const std::size_t frame_len = sizeof(EthernetHeader) + ip_total_len;
+    if (payload_len > VIRTIO_NET_MAX_FRAME_SIZE ||
+        frame_len > VIRTIO_NET_MAX_FRAME_SIZE ||
+        ip_total_len > 0xffffU) {
+        return false;
+    }
+
+    uint8_t dst_mac[6]{};
+    if (!arp_cache_lookup(dst_ip, dst_mac)) {
+        KPRINT("net: ARP lookup ");
+        log_ip_inline(dst_ip);
+        KPRINT(" miss, sending request\n");
+        net_send_arp_request(dst_ip);
+        return false;
+    }
+
+    uint8_t frame[VIRTIO_NET_MAX_FRAME_SIZE] = {};
+    auto eth = reinterpret_cast<EthernetHeader*>(frame);
+    auto ip = reinterpret_cast<Ipv4Header*>(frame + sizeof(EthernetHeader));
+    uint8_t* out_payload = frame + sizeof(EthernetHeader) + sizeof(Ipv4Header);
+
+    copy_bytes(eth->dst, dst_mac, 6);
+    copy_bytes(eth->src, g_my_mac, 6);
+    eth->ether_type = bswap16(ETH_TYPE_IPV4);
+
+    ip->version_ihl = 0x45;
+    ip->tos = 0;
+    ip->total_length = bswap16(uint16_t(ip_total_len));
+    ip->identification = bswap16(0x2222);
+    ip->flags_fragment = 0;
+    ip->ttl = 64;
+    ip->protocol = protocol;
+    ip->header_checksum = 0;
+    copy_bytes(ip->src_ip, g_my_ip, 4);
+    copy_bytes(ip->dst_ip, dst_ip, 4);
+    if (payload_len != 0) {
+        copy_bytes(out_payload, payload, payload_len);
+    }
+    ip->header_checksum =
+        bswap16(checksum16(reinterpret_cast<const uint8_t*>(ip),
+                           sizeof(Ipv4Header)));
+
+    if (!net_send_raw(frame, frame_len)) {
+        return false;
+    }
+
+    net_stats_increment(NetStatCounter::Ipv4Tx);
+    KPRINT("net: TX IPv4 proto=? ", Dec(protocol));
+    log_ip_inline(g_my_ip);
+    KPRINT(" -> ");
+    log_ip_inline(dst_ip);
+    KPRINT(" payload_len=?\n", Dec(payload_len));
+    return true;
 }
 
 // Main entry point for the protocol layer.
 // Person 2 gives us a raw Ethernet frame here.
 // We inspect the outer Ethernet header and choose what to do.
 void net_handle_frame(const uint8_t* data, std::size_t len) {
-    if (len < sizeof(EthernetHeader)) return;
+    if (len < sizeof(EthernetHeader)) {
+        net_stats_increment(NetStatCounter::DroppedShort);
+        trace_drop("short Ethernet frame");
+        return;
+    }
 
     auto eth = reinterpret_cast<const EthernetHeader*>(data);
 
     // First check whether this frame is even meant for us
-    if (!mac_is_for_me(eth->dst)) return;
+    if (!mac_is_for_me(eth->dst)) {
+        net_stats_increment(NetStatCounter::DroppedNotForMe);
+        trace_mac("drop dst MAC", eth->dst);
+        trace_drop("Ethernet frame for another MAC");
+        return;
+    }
 
     // Then decide what packet type is inside Ethernet
     uint16_t ether_type = bswap16(eth->ether_type);
@@ -326,6 +559,8 @@ void net_handle_frame(const uint8_t* data, std::size_t len) {
     }
 
     // Ignore anything else for now
+    net_stats_increment(NetStatCounter::DroppedUnknownEthertype);
+    trace_drop("unknown Ethernet type");
 }
 
 bool net_poll_once() {

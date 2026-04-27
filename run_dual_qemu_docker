@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+image="${DUAL_QEMU_DOCKER_IMAGE:-networking-p8-dual}"
+
+docker build -f Dockerfile.dual -t "${image}" .
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD:/work" \
+  -w /work \
+  -e DUAL_QEMU_PORT="${DUAL_QEMU_PORT:-12345}" \
+  "${image}" \
+  ./run_dual_qemu

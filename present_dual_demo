@@ -26,9 +26,13 @@ def keep_lines(path: str):
             lines.append(line)
         elif line.startswith("net: virtio rx dequeue"):
             lines.append(line)
-        if line.startswith("*** DUAL"):
+        elif line.startswith("net: TX ARP who-has"):
             lines.append(line)
-        elif line.startswith("***   payload"):
+        elif line.startswith("net: TX UDP"):
+            lines.append(line)
+        elif line.startswith("chat: "):
+            lines.append(line)
+        if line.startswith("*** DUAL"):
             lines.append(line)
     return lines
 

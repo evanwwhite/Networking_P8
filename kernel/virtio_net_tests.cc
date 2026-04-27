@@ -1,13 +1,17 @@
 #include "virtio_net_tests.h"
 
 #include "arp.h"
+#include "arp_cache.h"
 #include "ethernet.h"
 #include "icmp.h"
 #include "ipv4.h"
+#include "net_chat.h"
 #include "net_proto.h"
+#include "net_stats.h"
 #include "pit.h"
 #include "print.h"
 #include "thread.h"
+#include "udp.h"
 #include "virtio_net.h"
 
 namespace {
@@ -26,6 +30,10 @@ enum class NetTestCase : uint8_t {
   Rx,
   Queue,
   Debug,
+  Stats,
+  ArpCache,
+  Udp,
+  Chat,
   Proto,
   Live,
   RealTx,
@@ -47,7 +55,8 @@ constexpr uint8_t k_dual_sender_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x57};
 constexpr uint8_t k_dual_sender_ip[4] = {10, 0, 2, 21};
 constexpr uint8_t k_dual_responder_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
 constexpr uint8_t k_dual_responder_ip[4] = {10, 0, 2, 15};
-constexpr char k_dual_payload_text[] = "hello";
+constexpr char k_dual_chat_sender_text[] = "hello from sender";
+constexpr char k_dual_chat_responder_text[] = "hello from responder";
 
 enum class DualRole : uint8_t {
   Unknown,
@@ -57,6 +66,16 @@ enum class DualRole : uint8_t {
 
 TestFrames g_frames{};
 bool g_frames_ready = false;
+
+struct UdpCapture {
+  bool called;
+  uint8_t src_ip[4];
+  uint16_t src_port;
+  uint8_t payload[64];
+  size_t payload_len;
+};
+
+UdpCapture g_udp_capture{};
 
 void init_frames() {
   if (g_frames_ready) {
@@ -179,14 +198,48 @@ void build_icmp_echo_request_payload(uint8_t *frame, const uint8_t *payload_byte
       checksum16((const uint8_t *)icmp, sizeof(IcmpEchoHeader) + payload_len));
 }
 
-void build_arp_request_frame(uint8_t *frame, const uint8_t src_mac[6],
-                             const uint8_t src_ip[4], const uint8_t dst_ip[4]) {
+void build_udp_packet(uint8_t *frame, uint16_t src_port, uint16_t dst_port,
+                      const uint8_t *payload_bytes, size_t payload_len) {
+  auto *eth = (EthernetHeader *)frame;
+  auto *ip = (Ipv4Header *)(frame + sizeof(EthernetHeader));
+  auto *udp = (UdpHeader *)(frame + sizeof(EthernetHeader) + sizeof(Ipv4Header));
+  uint8_t *payload = frame + sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                     sizeof(UdpHeader);
+
+  copy_bytes_local(eth->dst, k_proto_my_mac, 6);
+  copy_bytes_local(eth->src, k_proto_peer_mac, 6);
+  eth->ether_type = be16(ETH_TYPE_IPV4);
+
+  ip->version_ihl = 0x45;
+  ip->tos = 0;
+  ip->total_length =
+      be16(uint16_t(sizeof(Ipv4Header) + sizeof(UdpHeader) + payload_len));
+  ip->identification = be16(0x3333);
+  ip->flags_fragment = 0;
+  ip->ttl = 64;
+  ip->protocol = IPV4_PROTO_UDP;
+  ip->header_checksum = 0;
+  copy_bytes_local(ip->src_ip, k_proto_peer_ip, 4);
+  copy_bytes_local(ip->dst_ip, k_proto_my_ip, 4);
+  ip->header_checksum =
+      be16(checksum16((const uint8_t *)ip, sizeof(Ipv4Header)));
+
+  udp->src_port = be16(src_port);
+  udp->dst_port = be16(dst_port);
+  udp->length = be16(uint16_t(sizeof(UdpHeader) + payload_len));
+  udp->checksum = 0;
+  for (size_t i = 0; i < payload_len; ++i) {
+    payload[i] = payload_bytes[i];
+  }
+}
+
+void build_arp_reply_frame(uint8_t *frame, const uint8_t src_mac[6],
+                           const uint8_t src_ip[4], const uint8_t dst_mac[6],
+                           const uint8_t dst_ip[4]) {
   auto *eth = (EthernetHeader *)frame;
   auto *arp = (ArpPacket *)(frame + sizeof(EthernetHeader));
-  uint8_t broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-  uint8_t zero_mac[6] = {};
 
-  copy_bytes_local(eth->dst, broadcast, 6);
+  copy_bytes_local(eth->dst, dst_mac, 6);
   copy_bytes_local(eth->src, src_mac, 6);
   eth->ether_type = be16(ETH_TYPE_ARP);
 
@@ -194,10 +247,10 @@ void build_arp_request_frame(uint8_t *frame, const uint8_t src_mac[6],
   arp->ptype = be16(ARP_PTYPE_IPV4);
   arp->hlen = 6;
   arp->plen = 4;
-  arp->oper = be16(ARP_OP_REQUEST);
+  arp->oper = be16(ARP_OP_REPLY);
   copy_bytes_local(arp->sha, src_mac, 6);
   copy_bytes_local(arp->spa, src_ip, 4);
-  copy_bytes_local(arp->tha, zero_mac, 6);
+  copy_bytes_local(arp->tha, dst_mac, 6);
   copy_bytes_local(arp->tpa, dst_ip, 4);
 }
 
@@ -270,6 +323,18 @@ NetTestCase parse_test_case(const char *name) {
   }
   if (strings_equal(name, "debug")) {
     return NetTestCase::Debug;
+  }
+  if (strings_equal(name, "stats")) {
+    return NetTestCase::Stats;
+  }
+  if (strings_equal(name, "arp_cache")) {
+    return NetTestCase::ArpCache;
+  }
+  if (strings_equal(name, "udp")) {
+    return NetTestCase::Udp;
+  }
+  if (strings_equal(name, "chat")) {
+    return NetTestCase::Chat;
   }
   if (strings_equal(name, "proto")) {
     return NetTestCase::Proto;
@@ -444,6 +509,16 @@ void demo_mac_line(const char *label, const uint8_t mac[6]) {
 void demo_ip_line(const char *label, const uint8_t ip[4]) {
   KPRINT("***   ? : ?.?.?.?\n", label, Dec(ip[0]), Dec(ip[1]), Dec(ip[2]),
          Dec(ip[3]));
+}
+
+void udp_test_handler(const uint8_t src_ip[4], uint16_t src_port,
+                      const uint8_t *payload, size_t payload_len) {
+  g_udp_capture.called = true;
+  copy_bytes_local(g_udp_capture.src_ip, src_ip, 4);
+  g_udp_capture.src_port = src_port;
+  g_udp_capture.payload_len =
+      min_size(payload_len, sizeof(g_udp_capture.payload));
+  copy_bytes_local(g_udp_capture.payload, payload, g_udp_capture.payload_len);
 }
 
 void demo_intro() {
@@ -823,6 +898,485 @@ void run_debug_tests(Reporter &reporter) {
   reset_fake_backend();
 }
 
+void run_stats_tests(Reporter &reporter) {
+  reset_fake_backend();
+  net_stats_reset();
+
+  uint8_t frame[128]{};
+  uint8_t tx[VIRTIO_NET_MAX_FRAME_SIZE]{};
+
+  NetStats stats = net_stats_snapshot();
+  reporter.check_eq("stats.initial_raw_rx", int(stats.raw_rx), 0);
+  reporter.check_eq("stats.initial_raw_tx", int(stats.raw_tx), 0);
+  reporter.check_eq("stats.initial_drops", int(stats.dropped_short), 0);
+
+  build_arp_request(frame);
+  const size_t arp_len = sizeof(EthernetHeader) + sizeof(ArpPacket);
+  reporter.check("stats.arp.inject", net_fake_inject_rx(frame, arp_len));
+  reporter.check("stats.arp.poll_once", net_poll_once());
+  {
+    size_t tx_len = sizeof(tx);
+    reporter.check("stats.arp.reply_captured",
+                   net_copy_last_tx_for_test(tx, &tx_len));
+  }
+
+  stats = net_stats_snapshot();
+  reporter.check_eq("stats.after_arp_raw_rx", int(stats.raw_rx), 1);
+  reporter.check_eq("stats.after_arp_raw_tx", int(stats.raw_tx), 1);
+  reporter.check_eq("stats.after_arp_arp_rx", int(stats.arp_rx), 1);
+  reporter.check_eq("stats.after_arp_arp_tx", int(stats.arp_tx), 1);
+  reporter.check_eq("stats.after_arp_ipv4_rx", int(stats.ipv4_rx), 0);
+
+  constexpr size_t k_payload_len = 5;
+  build_icmp_echo_request(frame, k_payload_len);
+  const size_t request_len = sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                             sizeof(IcmpEchoHeader) + k_payload_len;
+  reporter.check("stats.icmp.inject", net_fake_inject_rx(frame, request_len));
+  reporter.check("stats.icmp.poll_once", net_poll_once());
+  {
+    size_t tx_len = sizeof(tx);
+    reporter.check("stats.icmp.reply_captured",
+                   net_copy_last_tx_for_test(tx, &tx_len));
+  }
+
+  stats = net_stats_snapshot();
+  reporter.check_eq("stats.after_icmp_raw_rx", int(stats.raw_rx), 2);
+  reporter.check_eq("stats.after_icmp_raw_tx", int(stats.raw_tx), 2);
+  reporter.check_eq("stats.after_icmp_ipv4_rx", int(stats.ipv4_rx), 1);
+  reporter.check_eq("stats.after_icmp_ipv4_tx", int(stats.ipv4_tx), 1);
+  reporter.check_eq("stats.after_icmp_icmp_rx", int(stats.icmp_rx), 1);
+  reporter.check_eq("stats.after_icmp_icmp_tx", int(stats.icmp_tx), 1);
+
+  reporter.check("stats.short.inject", net_fake_inject_rx(frame, 6));
+  reporter.check("stats.short.poll_once", net_poll_once());
+  stats = net_stats_snapshot();
+  reporter.check_eq("stats.after_short_raw_rx", int(stats.raw_rx), 3);
+  reporter.check_eq("stats.after_short_drop", int(stats.dropped_short), 1);
+
+  build_icmp_echo_request(frame, k_payload_len);
+  auto *ip = (Ipv4Header *)(frame + sizeof(EthernetHeader));
+  ip->header_checksum = uint16_t(ip->header_checksum ^ 0xffffU);
+  reporter.check("stats.bad_checksum.inject",
+                 net_fake_inject_rx(frame, request_len));
+  reporter.check("stats.bad_checksum.poll_once", net_poll_once());
+  stats = net_stats_snapshot();
+  reporter.check_eq("stats.after_bad_checksum_raw_rx", int(stats.raw_rx), 4);
+  reporter.check_eq("stats.after_bad_checksum_drop",
+                    int(stats.dropped_bad_checksum), 1);
+  reporter.check_eq("stats.after_bad_checksum_icmp_rx", int(stats.icmp_rx), 1);
+
+  build_icmp_echo_request(frame, k_payload_len);
+  auto *eth = (EthernetHeader *)frame;
+  eth->dst[5] ^= 0x55;
+  reporter.check("stats.not_for_me.inject",
+                 net_fake_inject_rx(frame, request_len));
+  reporter.check("stats.not_for_me.poll_once", net_poll_once());
+  stats = net_stats_snapshot();
+  reporter.check_eq("stats.after_not_for_me_raw_rx", int(stats.raw_rx), 5);
+  reporter.check_eq("stats.after_not_for_me_drop",
+                    int(stats.dropped_not_for_me), 1);
+
+  build_icmp_echo_request(frame, k_payload_len);
+  eth = (EthernetHeader *)frame;
+  eth->ether_type = be16(0x88b5);
+  reporter.check("stats.unknown_ethertype.inject",
+                 net_fake_inject_rx(frame, request_len));
+  reporter.check("stats.unknown_ethertype.poll_once", net_poll_once());
+  stats = net_stats_snapshot();
+  reporter.check_eq("stats.after_unknown_ethertype_raw_rx", int(stats.raw_rx),
+                    6);
+  reporter.check_eq("stats.after_unknown_ethertype_drop",
+                    int(stats.dropped_unknown_ethertype), 1);
+
+  build_icmp_echo_request(frame, k_payload_len);
+  ip = (Ipv4Header *)(frame + sizeof(EthernetHeader));
+  ip->protocol = 99;
+  ip->header_checksum = 0;
+  ip->header_checksum =
+      be16(checksum16((const uint8_t *)ip, sizeof(Ipv4Header)));
+  reporter.check("stats.unknown_ipv4.inject",
+                 net_fake_inject_rx(frame, request_len));
+  reporter.check("stats.unknown_ipv4.poll_once", net_poll_once());
+  stats = net_stats_snapshot();
+  reporter.check_eq("stats.after_unknown_ipv4_raw_rx", int(stats.raw_rx), 7);
+  reporter.check_eq("stats.after_unknown_ipv4_rx", int(stats.ipv4_rx), 2);
+  reporter.check_eq("stats.after_unknown_ipv4_drop",
+                    int(stats.dropped_unknown_ipv4_protocol), 1);
+  reporter.check_eq("stats.final_udp_rx", int(stats.udp_rx), 0);
+  reporter.check_eq("stats.final_udp_tx", int(stats.udp_tx), 0);
+
+  net_stats_print();
+  reset_fake_backend();
+}
+
+void run_arp_cache_tests(Reporter &reporter) {
+  reset_fake_backend();
+  net_stats_reset();
+  arp_cache_reset();
+  net_set_identity(k_proto_my_mac, k_proto_my_ip);
+
+  uint8_t frame[128]{};
+  uint8_t tx[VIRTIO_NET_MAX_FRAME_SIZE]{};
+  uint8_t mac[6]{};
+
+  reporter.check("arp_cache.initial_miss",
+                 !arp_cache_lookup(k_proto_peer_ip, mac));
+
+  build_arp_request(frame);
+  const size_t arp_len = sizeof(EthernetHeader) + sizeof(ArpPacket);
+  reporter.check("arp_cache.learn_request.inject",
+                 net_fake_inject_rx(frame, arp_len));
+  reporter.check("arp_cache.learn_request.poll_once", net_poll_once());
+  reporter.check("arp_cache.learn_request.lookup",
+                 arp_cache_lookup(k_proto_peer_ip, mac));
+  reporter.check_bytes("arp_cache.learn_request.mac", mac, k_proto_peer_mac, 6);
+
+  arp_cache_reset();
+  build_arp_reply_frame(frame, k_proto_peer_mac, k_proto_peer_ip, k_proto_my_mac,
+                        k_proto_my_ip);
+  reporter.check("arp_cache.learn_reply.inject",
+                 net_fake_inject_rx(frame, arp_len));
+  reporter.check("arp_cache.learn_reply.poll_once", net_poll_once());
+  reporter.check("arp_cache.learn_reply.lookup",
+                 arp_cache_lookup(k_proto_peer_ip, mac));
+  reporter.check_bytes("arp_cache.learn_reply.mac", mac, k_proto_peer_mac, 6);
+
+  arp_cache_reset();
+  for (uint8_t i = 0; i < ARP_CACHE_CAPACITY; ++i) {
+    uint8_t ip[4] = {10, 0, 2, uint8_t(30 + i)};
+    uint8_t entry_mac[6] = {0x02, 0x00, 0x00, 0x00, 0x10, i};
+    arp_cache_insert(ip, entry_mac);
+  }
+  {
+    uint8_t overflow_ip[4] = {10, 0, 2, 99};
+    uint8_t overflow_mac[6] = {0x02, 0x00, 0x00, 0x00, 0x20, 0x99};
+    uint8_t first_ip[4] = {10, 0, 2, 30};
+    uint8_t second_ip[4] = {10, 0, 2, 31};
+
+    arp_cache_insert(overflow_ip, overflow_mac);
+    reporter.check("arp_cache.evict_oldest", !arp_cache_lookup(first_ip, mac));
+    reporter.check("arp_cache.keep_newer", arp_cache_lookup(second_ip, mac));
+    reporter.check("arp_cache.insert_after_evict",
+                   arp_cache_lookup(overflow_ip, mac));
+    reporter.check_bytes("arp_cache.evicted_slot_mac", mac, overflow_mac, 6);
+  }
+
+  reset_fake_backend();
+  arp_cache_reset();
+  uint8_t payload[4] = {'p', 'i', 'n', 'g'};
+  reporter.check("arp_cache.ipv4_miss_returns_pending",
+                 !net_send_ipv4(k_proto_peer_ip, 99, payload, sizeof(payload)));
+  {
+    size_t tx_len = sizeof(tx);
+    reporter.check("arp_cache.ipv4_miss_arp_tx",
+                   net_copy_last_tx_for_test(tx, &tx_len));
+    reporter.check_eq("arp_cache.ipv4_miss_arp_len", int(tx_len),
+                      int(arp_len));
+    if (tx_len == arp_len) {
+      auto *eth = (EthernetHeader *)tx;
+      auto *arp = (ArpPacket *)(tx + sizeof(EthernetHeader));
+      uint8_t broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+      uint8_t zero_mac[6] = {};
+      reporter.check_bytes("arp_cache.ipv4_miss_eth_dst", eth->dst,
+                           broadcast, 6);
+      reporter.check_bytes("arp_cache.ipv4_miss_eth_src", eth->src,
+                           k_proto_my_mac, 6);
+      reporter.check("arp_cache.ipv4_miss_op",
+                     be16(arp->oper) == ARP_OP_REQUEST);
+      reporter.check_bytes("arp_cache.ipv4_miss_sha", arp->sha,
+                           k_proto_my_mac, 6);
+      reporter.check_bytes("arp_cache.ipv4_miss_spa", arp->spa,
+                           k_proto_my_ip, 4);
+      reporter.check_bytes("arp_cache.ipv4_miss_tha", arp->tha, zero_mac, 6);
+      reporter.check_bytes("arp_cache.ipv4_miss_tpa", arp->tpa,
+                           k_proto_peer_ip, 4);
+    }
+  }
+
+  arp_cache_insert(k_proto_peer_ip, k_proto_peer_mac);
+  reporter.check("arp_cache.ipv4_hit_sends",
+                 net_send_ipv4(k_proto_peer_ip, 99, payload, sizeof(payload)));
+  {
+    size_t tx_len = sizeof(tx);
+    reporter.check("arp_cache.ipv4_hit_tx",
+                   net_copy_last_tx_for_test(tx, &tx_len));
+    reporter.check_eq("arp_cache.ipv4_hit_len", int(tx_len),
+                      int(sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                          sizeof(payload)));
+    if (tx_len == sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                      sizeof(payload)) {
+      auto *eth = (EthernetHeader *)tx;
+      auto *ip = (Ipv4Header *)(tx + sizeof(EthernetHeader));
+      const uint8_t *out_payload =
+          tx + sizeof(EthernetHeader) + sizeof(Ipv4Header);
+      reporter.check_bytes("arp_cache.ipv4_hit_eth_dst", eth->dst,
+                           k_proto_peer_mac, 6);
+      reporter.check_bytes("arp_cache.ipv4_hit_eth_src", eth->src,
+                           k_proto_my_mac, 6);
+      reporter.check("arp_cache.ipv4_hit_eth_type",
+                     be16(eth->ether_type) == ETH_TYPE_IPV4);
+      reporter.check_bytes("arp_cache.ipv4_hit_src_ip", ip->src_ip,
+                           k_proto_my_ip, 4);
+      reporter.check_bytes("arp_cache.ipv4_hit_dst_ip", ip->dst_ip,
+                           k_proto_peer_ip, 4);
+      reporter.check("arp_cache.ipv4_hit_protocol", ip->protocol == 99);
+      reporter.check("arp_cache.ipv4_hit_checksum",
+                     checksum16((const uint8_t *)ip, sizeof(Ipv4Header)) == 0);
+      reporter.check_bytes("arp_cache.ipv4_hit_payload", out_payload, payload,
+                           sizeof(payload));
+    }
+  }
+
+  NetStats stats = net_stats_snapshot();
+  reporter.check_eq("arp_cache.stats_arp_tx", int(stats.arp_tx), 2);
+  reporter.check_eq("arp_cache.stats_ipv4_tx", int(stats.ipv4_tx), 1);
+
+  arp_cache_print();
+  reset_fake_backend();
+  arp_cache_reset();
+}
+
+void run_udp_tests(Reporter &reporter) {
+  reset_fake_backend();
+  net_stats_reset();
+  arp_cache_reset();
+  udp_clear_handlers();
+  net_set_identity(k_proto_my_mac, k_proto_my_ip);
+  g_udp_capture = {};
+
+  constexpr uint16_t k_listen_port = 4390;
+  constexpr uint16_t k_peer_port = 12000;
+  constexpr uint8_t k_payload[] = {'h', 'e', 'l', 'l', 'o'};
+  uint8_t frame[128]{};
+  uint8_t tx[VIRTIO_NET_MAX_FRAME_SIZE]{};
+
+  reporter.check("udp.register_handler",
+                 udp_register_handler(k_listen_port, udp_test_handler));
+
+  build_udp_packet(frame, k_peer_port, k_listen_port, k_payload,
+                   sizeof(k_payload));
+  const size_t udp_frame_len = sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                               sizeof(UdpHeader) + sizeof(k_payload);
+  reporter.check("udp.rx_valid.inject",
+                 net_fake_inject_rx(frame, udp_frame_len));
+  reporter.check("udp.rx_valid.poll_once", net_poll_once());
+  reporter.check("udp.rx_valid.handler_called", g_udp_capture.called);
+  reporter.check_bytes("udp.rx_valid.src_ip", g_udp_capture.src_ip,
+                       k_proto_peer_ip, 4);
+  reporter.check_eq("udp.rx_valid.src_port", int(g_udp_capture.src_port),
+                    int(k_peer_port));
+  reporter.check_eq("udp.rx_valid.payload_len", int(g_udp_capture.payload_len),
+                    int(sizeof(k_payload)));
+  reporter.check_bytes("udp.rx_valid.payload", g_udp_capture.payload,
+                       k_payload, sizeof(k_payload));
+
+  g_udp_capture = {};
+  build_udp_packet(frame, k_peer_port, uint16_t(k_listen_port + 1), k_payload,
+                   sizeof(k_payload));
+  reporter.check("udp.wrong_port.inject",
+                 net_fake_inject_rx(frame, udp_frame_len));
+  reporter.check("udp.wrong_port.poll_once", net_poll_once());
+  reporter.check("udp.wrong_port.ignored", !g_udp_capture.called);
+
+  build_udp_packet(frame, k_peer_port, k_listen_port, k_payload,
+                   sizeof(k_payload));
+  auto *ip = (Ipv4Header *)(frame + sizeof(EthernetHeader));
+  ip->total_length = be16(uint16_t(sizeof(Ipv4Header) + 4));
+  ip->header_checksum = 0;
+  ip->header_checksum =
+      be16(checksum16((const uint8_t *)ip, sizeof(Ipv4Header)));
+  reporter.check("udp.short.inject",
+                 net_fake_inject_rx(frame, sizeof(EthernetHeader) +
+                                               sizeof(Ipv4Header) + 4));
+  reporter.check("udp.short.poll_once", net_poll_once());
+
+  arp_cache_reset();
+  reporter.check("udp.tx_miss_returns_pending",
+                 !udp_send_to(k_proto_peer_ip, k_listen_port, k_peer_port,
+                              k_payload, sizeof(k_payload)));
+  {
+    size_t tx_len = sizeof(tx);
+    reporter.check("udp.tx_miss_arp_tx",
+                   net_copy_last_tx_for_test(tx, &tx_len));
+    reporter.check_eq("udp.tx_miss_arp_len", int(tx_len),
+                      int(sizeof(EthernetHeader) + sizeof(ArpPacket)));
+    if (tx_len == sizeof(EthernetHeader) + sizeof(ArpPacket)) {
+      auto *eth = (EthernetHeader *)tx;
+      auto *arp = (ArpPacket *)(tx + sizeof(EthernetHeader));
+      uint8_t broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+      reporter.check_bytes("udp.tx_miss_eth_dst", eth->dst, broadcast, 6);
+      reporter.check("udp.tx_miss_arp_op", be16(arp->oper) == ARP_OP_REQUEST);
+      reporter.check_bytes("udp.tx_miss_tpa", arp->tpa, k_proto_peer_ip, 4);
+    }
+  }
+
+  arp_cache_insert(k_proto_peer_ip, k_proto_peer_mac);
+  reporter.check("udp.tx_hit_sends",
+                 udp_send_to(k_proto_peer_ip, k_listen_port, k_peer_port,
+                             k_payload, sizeof(k_payload)));
+  {
+    size_t tx_len = sizeof(tx);
+    reporter.check("udp.tx_hit_frame", net_copy_last_tx_for_test(tx, &tx_len));
+    reporter.check_eq("udp.tx_hit_len", int(tx_len), int(udp_frame_len));
+    if (tx_len == udp_frame_len) {
+      auto *eth = (EthernetHeader *)tx;
+      auto *out_ip = (Ipv4Header *)(tx + sizeof(EthernetHeader));
+      auto *udp =
+          (UdpHeader *)(tx + sizeof(EthernetHeader) + sizeof(Ipv4Header));
+      const uint8_t *out_payload =
+          tx + sizeof(EthernetHeader) + sizeof(Ipv4Header) + sizeof(UdpHeader);
+      reporter.check_bytes("udp.tx_hit_eth_dst", eth->dst, k_proto_peer_mac,
+                           6);
+      reporter.check_bytes("udp.tx_hit_eth_src", eth->src, k_proto_my_mac, 6);
+      reporter.check("udp.tx_hit_ip_protocol",
+                     out_ip->protocol == IPV4_PROTO_UDP);
+      reporter.check("udp.tx_hit_ip_checksum",
+                     checksum16((const uint8_t *)out_ip,
+                                sizeof(Ipv4Header)) == 0);
+      reporter.check_eq("udp.tx_hit_src_port", int(be16(udp->src_port)),
+                        int(k_listen_port));
+      reporter.check_eq("udp.tx_hit_dst_port", int(be16(udp->dst_port)),
+                        int(k_peer_port));
+      reporter.check_eq("udp.tx_hit_udp_len", int(be16(udp->length)),
+                        int(sizeof(UdpHeader) + sizeof(k_payload)));
+      reporter.check_eq("udp.tx_hit_checksum_zero", int(udp->checksum), 0);
+      reporter.check_bytes("udp.tx_hit_payload", out_payload, k_payload,
+                           sizeof(k_payload));
+    }
+  }
+
+  NetStats stats = net_stats_snapshot();
+  reporter.check_eq("udp.stats_udp_rx", int(stats.udp_rx), 1);
+  reporter.check_eq("udp.stats_udp_tx", int(stats.udp_tx), 1);
+  reporter.check_eq("udp.stats_arp_tx", int(stats.arp_tx), 1);
+  reporter.check_eq("udp.stats_ipv4_tx", int(stats.ipv4_tx), 1);
+  reporter.check_eq("udp.stats_short_drop", int(stats.dropped_short), 1);
+
+  udp_clear_handlers();
+  reset_fake_backend();
+  arp_cache_reset();
+}
+
+void run_chat_tests(Reporter &reporter) {
+  reset_fake_backend();
+  net_stats_reset();
+  arp_cache_reset();
+  udp_clear_handlers();
+  net_chat_reset();
+  net_set_identity(k_proto_my_mac, k_proto_my_ip);
+
+  uint8_t frame[256]{};
+  uint8_t tx[VIRTIO_NET_MAX_FRAME_SIZE]{};
+  char out[160]{};
+  constexpr uint8_t k_hello[] = {'h', 'e', 'l', 'l', 'o'};
+
+  reporter.check("chat.init", net_chat_init());
+
+  build_udp_packet(frame, 12000, NET_CHAT_PORT, k_hello, sizeof(k_hello));
+  const size_t hello_frame_len = sizeof(EthernetHeader) + sizeof(Ipv4Header) +
+                                 sizeof(UdpHeader) + sizeof(k_hello);
+  reporter.check("chat.rx_hello.inject",
+                 net_fake_inject_rx(frame, hello_frame_len));
+  reporter.check("chat.rx_hello.poll", net_chat_poll());
+  reporter.check("chat.rx_hello.recv", net_chat_recv(out, sizeof(out)));
+  reporter.check("chat.rx_hello.text", strings_equal(out, "hello"));
+  net_chat_print_history();
+
+  constexpr uint8_t k_dirty[] = {'o', 'k', 1, '!'};
+  build_udp_packet(frame, 12000, NET_CHAT_PORT, k_dirty, sizeof(k_dirty));
+  reporter.check("chat.sanitize.inject",
+                 net_fake_inject_rx(frame, sizeof(EthernetHeader) +
+                                               sizeof(Ipv4Header) +
+                                               sizeof(UdpHeader) +
+                                               sizeof(k_dirty)));
+  reporter.check("chat.sanitize.poll", net_chat_poll());
+  reporter.check("chat.sanitize.recv", net_chat_recv(out, sizeof(out)));
+  reporter.check("chat.sanitize.text", strings_equal(out, "ok.!"));
+
+  uint8_t long_payload[NET_CHAT_TEXT_SIZE + 16]{};
+  for (size_t i = 0; i < sizeof(long_payload); ++i) {
+    long_payload[i] = 'A';
+  }
+  build_udp_packet(frame, 12000, NET_CHAT_PORT, long_payload,
+                   sizeof(long_payload));
+  reporter.check("chat.truncate.inject",
+                 net_fake_inject_rx(frame, sizeof(EthernetHeader) +
+                                               sizeof(Ipv4Header) +
+                                               sizeof(UdpHeader) +
+                                               sizeof(long_payload)));
+  reporter.check("chat.truncate.poll", net_chat_poll());
+  reporter.check("chat.truncate.recv", net_chat_recv(out, sizeof(out)));
+  bool truncated_ok = out[NET_CHAT_TEXT_SIZE - 1] == 0;
+  for (size_t i = 0; i < NET_CHAT_TEXT_SIZE - 1; ++i) {
+    if (out[i] != 'A') {
+      truncated_ok = false;
+      break;
+    }
+  }
+  reporter.check("chat.truncate.text", truncated_ok);
+
+  arp_cache_reset();
+  reporter.check("chat.send_miss_returns_pending",
+                 !net_chat_send(k_proto_peer_ip, "hello"));
+  {
+    size_t tx_len = sizeof(tx);
+    reporter.check("chat.send_miss_arp_tx",
+                   net_copy_last_tx_for_test(tx, &tx_len));
+    reporter.check_eq("chat.send_miss_arp_len", int(tx_len),
+                      int(sizeof(EthernetHeader) + sizeof(ArpPacket)));
+    if (tx_len == sizeof(EthernetHeader) + sizeof(ArpPacket)) {
+      auto *eth = (EthernetHeader *)tx;
+      auto *arp = (ArpPacket *)(tx + sizeof(EthernetHeader));
+      uint8_t broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+      reporter.check_bytes("chat.send_miss_eth_dst", eth->dst, broadcast, 6);
+      reporter.check("chat.send_miss_arp_op",
+                     be16(arp->oper) == ARP_OP_REQUEST);
+      reporter.check_bytes("chat.send_miss_tpa", arp->tpa, k_proto_peer_ip, 4);
+    }
+  }
+
+  arp_cache_insert(k_proto_peer_ip, k_proto_peer_mac);
+  reporter.check("chat.send_hit_sends", net_chat_send(k_proto_peer_ip, "hello"));
+  {
+    size_t tx_len = sizeof(tx);
+    reporter.check("chat.send_hit_frame",
+                   net_copy_last_tx_for_test(tx, &tx_len));
+    reporter.check_eq("chat.send_hit_len", int(tx_len),
+                      int(hello_frame_len));
+    if (tx_len == hello_frame_len) {
+      auto *eth = (EthernetHeader *)tx;
+      auto *ip = (Ipv4Header *)(tx + sizeof(EthernetHeader));
+      auto *udp =
+          (UdpHeader *)(tx + sizeof(EthernetHeader) + sizeof(Ipv4Header));
+      const uint8_t *payload =
+          tx + sizeof(EthernetHeader) + sizeof(Ipv4Header) + sizeof(UdpHeader);
+      reporter.check_bytes("chat.send_hit_eth_dst", eth->dst, k_proto_peer_mac,
+                           6);
+      reporter.check("chat.send_hit_ip_protocol", ip->protocol == IPV4_PROTO_UDP);
+      reporter.check_eq("chat.send_hit_src_port", int(be16(udp->src_port)),
+                        int(NET_CHAT_PORT));
+      reporter.check_eq("chat.send_hit_dst_port", int(be16(udp->dst_port)),
+                        int(NET_CHAT_PORT));
+      reporter.check_eq("chat.send_hit_udp_len", int(be16(udp->length)),
+                        int(sizeof(UdpHeader) + sizeof(k_hello)));
+      reporter.check_bytes("chat.send_hit_payload", payload, k_hello,
+                           sizeof(k_hello));
+    }
+  }
+
+  NetStats stats = net_stats_snapshot();
+  reporter.check_eq("chat.stats_udp_rx", int(stats.udp_rx), 3);
+  reporter.check_eq("chat.stats_udp_tx", int(stats.udp_tx), 1);
+  reporter.check_eq("chat.stats_arp_tx", int(stats.arp_tx), 1);
+  reporter.check_eq("chat.stats_ipv4_tx", int(stats.ipv4_tx), 1);
+
+  net_chat_print_history();
+  udp_clear_handlers();
+  net_chat_reset();
+  reset_fake_backend();
+  arp_cache_reset();
+}
+
 void run_proto_tests(Reporter &reporter) {
   reset_fake_backend();
 
@@ -942,227 +1496,63 @@ void run_real_tx_tests(Reporter &reporter) {
                     net_recv_raw(out, sizeof(out)), 0);
 }
 
-bool wait_for_matching_frame(uint8_t *frame, size_t *frame_len,
-                             uint64_t timeout_jiffies,
-                             bool (*match)(const uint8_t *, size_t)) {
-  uint8_t tmp[VIRTIO_NET_MAX_FRAME_SIZE]{};
-
-  while (Pit::jiffies < timeout_jiffies) {
-    int recv_len = net_recv_raw(tmp, sizeof(tmp));
-    if (recv_len > 0) {
-      if (match(tmp, size_t(recv_len))) {
-        const size_t to_copy = min_size(*frame_len, size_t(recv_len));
-        copy_bytes_local(frame, tmp, to_copy);
-        *frame_len = size_t(recv_len);
-        return true;
-      }
-      continue;
-    }
-    Thread::yield();
-  }
-
-  return false;
-}
-
-bool is_dual_arp_reply(const uint8_t *frame, size_t len) {
-  if (len < sizeof(EthernetHeader) + sizeof(ArpPacket)) {
-    return false;
-  }
-  auto *eth = (const EthernetHeader *)frame;
-  auto *arp = (const ArpPacket *)(frame + sizeof(EthernetHeader));
-  return be16(eth->ether_type) == ETH_TYPE_ARP &&
-         be16(arp->oper) == ARP_OP_REPLY &&
-         bytes_equal(eth->src, k_dual_responder_mac, 6) &&
-         bytes_equal(arp->spa, k_dual_responder_ip, 4) &&
-         bytes_equal(arp->tpa, k_dual_sender_ip, 4);
-}
-
-bool is_dual_icmp_reply(const uint8_t *frame, size_t len) {
-  const size_t payload_len = sizeof(k_dual_payload_text) - 1;
-  const size_t want_len = sizeof(EthernetHeader) + sizeof(Ipv4Header) +
-                          sizeof(IcmpEchoHeader) + payload_len;
-  if (len != want_len) {
-    return false;
-  }
-
-  auto *eth = (const EthernetHeader *)frame;
-  auto *ip = (const Ipv4Header *)(frame + sizeof(EthernetHeader));
-  auto *icmp =
-      (const IcmpEchoHeader *)(frame + sizeof(EthernetHeader) + sizeof(Ipv4Header));
-  const uint8_t *payload =
-      frame + sizeof(EthernetHeader) + sizeof(Ipv4Header) + sizeof(IcmpEchoHeader);
-
-  return be16(eth->ether_type) == ETH_TYPE_IPV4 &&
-         bytes_equal(eth->src, k_dual_responder_mac, 6) &&
-         bytes_equal(ip->src_ip, k_dual_responder_ip, 4) &&
-         bytes_equal(ip->dst_ip, k_dual_sender_ip, 4) &&
-         icmp->type == ICMP_ECHO_REPLY &&
-         icmp->identifier == be16(0x5151) &&
-         icmp->sequence == be16(1) &&
-         bytes_equal(payload, (const uint8_t *)k_dual_payload_text, payload_len);
-}
-
-bool try_dual_send_arp_reply(const uint8_t *frame, size_t len) {
-  if (len < sizeof(EthernetHeader) + sizeof(ArpPacket)) {
-    return false;
-  }
-
-  auto *eth = (const EthernetHeader *)frame;
-  auto *arp = (const ArpPacket *)(frame + sizeof(EthernetHeader));
-  if (be16(eth->ether_type) != ETH_TYPE_ARP || be16(arp->oper) != ARP_OP_REQUEST ||
-      !bytes_equal(arp->tpa, k_dual_responder_ip, 4)) {
-    return false;
-  }
-
-  uint8_t reply[sizeof(EthernetHeader) + sizeof(ArpPacket)]{};
-  auto *out_eth = (EthernetHeader *)reply;
-  auto *out_arp = (ArpPacket *)(reply + sizeof(EthernetHeader));
-
-  copy_bytes_local(out_eth->dst, eth->src, 6);
-  copy_bytes_local(out_eth->src, k_dual_responder_mac, 6);
-  out_eth->ether_type = be16(ETH_TYPE_ARP);
-
-  out_arp->htype = be16(ARP_HTYPE_ETHERNET);
-  out_arp->ptype = be16(ARP_PTYPE_IPV4);
-  out_arp->hlen = 6;
-  out_arp->plen = 4;
-  out_arp->oper = be16(ARP_OP_REPLY);
-  copy_bytes_local(out_arp->sha, k_dual_responder_mac, 6);
-  copy_bytes_local(out_arp->spa, k_dual_responder_ip, 4);
-  copy_bytes_local(out_arp->tha, arp->sha, 6);
-  copy_bytes_local(out_arp->tpa, arp->spa, 4);
-
-  KPRINT("*** DUAL responder : ARP reply to ?.?.?.?\n", Dec(arp->spa[0]),
-         Dec(arp->spa[1]), Dec(arp->spa[2]), Dec(arp->spa[3]));
-  return net_send_raw(reply, sizeof(reply));
-}
-
-bool try_dual_send_icmp_reply(const uint8_t *frame, size_t len) {
-  const size_t min_len =
-      sizeof(EthernetHeader) + sizeof(Ipv4Header) + sizeof(IcmpEchoHeader);
-  if (len < min_len) {
-    return false;
-  }
-
-  auto *eth = (const EthernetHeader *)frame;
-  auto *ip = (const Ipv4Header *)(frame + sizeof(EthernetHeader));
-  if (be16(eth->ether_type) != ETH_TYPE_IPV4 || ip->protocol != IPV4_PROTO_ICMP ||
-      !bytes_equal(ip->dst_ip, k_dual_responder_ip, 4)) {
-    return false;
-  }
-
-  const size_t ip_total_len = be16(ip->total_length);
-  if (ip_total_len < sizeof(Ipv4Header) + sizeof(IcmpEchoHeader) ||
-      sizeof(EthernetHeader) + ip_total_len > len) {
-    return false;
-  }
-
-  auto *icmp =
-      (const IcmpEchoHeader *)(frame + sizeof(EthernetHeader) + sizeof(Ipv4Header));
-  if (icmp->type != ICMP_ECHO_REQUEST) {
-    return false;
-  }
-
-  const size_t payload_len = ip_total_len - sizeof(Ipv4Header) - sizeof(IcmpEchoHeader);
-  const uint8_t *payload = frame + sizeof(EthernetHeader) + sizeof(Ipv4Header) +
-                           sizeof(IcmpEchoHeader);
-
-  uint8_t reply[VIRTIO_NET_MAX_FRAME_SIZE]{};
-  copy_bytes_local(reply, frame, sizeof(EthernetHeader) + ip_total_len);
-
-  auto *out_eth = (EthernetHeader *)reply;
-  auto *out_ip = (Ipv4Header *)(reply + sizeof(EthernetHeader));
-  auto *out_icmp =
-      (IcmpEchoHeader *)(reply + sizeof(EthernetHeader) + sizeof(Ipv4Header));
-
-  copy_bytes_local(out_eth->dst, eth->src, 6);
-  copy_bytes_local(out_eth->src, k_dual_responder_mac, 6);
-  copy_bytes_local(out_ip->src_ip, k_dual_responder_ip, 4);
-  copy_bytes_local(out_ip->dst_ip, ip->src_ip, 4);
-  out_ip->header_checksum = 0;
-  out_ip->header_checksum =
-      be16(checksum16((const uint8_t *)out_ip, sizeof(Ipv4Header)));
-
-  out_icmp->type = ICMP_ECHO_REPLY;
-  out_icmp->code = 0;
-  out_icmp->checksum = 0;
-  out_icmp->checksum = be16(
-      checksum16((const uint8_t *)out_icmp, sizeof(IcmpEchoHeader) + payload_len));
-
-  demo_payload_line("payload  ", payload, payload_len);
-  KPRINT("*** DUAL responder : ICMP echo reply\n");
-  return net_send_raw(reply, sizeof(EthernetHeader) + ip_total_len);
-}
-
 void run_dual_sender(Reporter &reporter) {
-  uint8_t frame[128]{};
-  uint8_t reply[VIRTIO_NET_MAX_FRAME_SIZE]{};
-
   KPRINT("*** DUAL role    : sender\n");
   demo_ip_line("sender IP", k_dual_sender_ip);
   demo_ip_line("peer IP  ", k_dual_responder_ip);
   reporter.check("dual.sender.ready_after_pci_init", net_ready());
+  reporter.check("dual.sender.chat_init", net_chat_init());
 
   uint64_t start = Pit::jiffies;
   while (Pit::jiffies < start + 1000) {
     Thread::yield();
   }
 
-  build_arp_request_frame(frame, k_dual_sender_mac, k_dual_sender_ip,
-                          k_dual_responder_ip);
-  KPRINT("*** DUAL sender : ARP who-has ?.?.?.?\n", Dec(k_dual_responder_ip[0]),
-         Dec(k_dual_responder_ip[1]), Dec(k_dual_responder_ip[2]),
-         Dec(k_dual_responder_ip[3]));
-  reporter.check("dual.sender.arp_request_tx",
-                 net_send_raw(frame, sizeof(EthernetHeader) + sizeof(ArpPacket)));
+  reporter.check("dual.sender.chat_first_send_pending",
+                 !net_chat_send(k_dual_responder_ip, k_dual_chat_sender_text));
 
-  size_t reply_len = sizeof(reply);
-  reporter.check(
-      "dual.sender.arp_reply_rx",
-      wait_for_matching_frame(reply, &reply_len, Pit::jiffies + 3000,
-                              is_dual_arp_reply));
-  if (is_dual_arp_reply(reply, reply_len)) {
-    KPRINT("*** DUAL sender : learned ?.?.?.? is at ?:?:?:?:?:?\n",
-           Dec(k_dual_responder_ip[0]), Dec(k_dual_responder_ip[1]),
-           Dec(k_dual_responder_ip[2]), Dec(k_dual_responder_ip[3]), reply[6],
-           reply[7], reply[8], reply[9], reply[10], reply[11]);
+  uint8_t learned_mac[6]{};
+  bool arp_resolved = false;
+  uint64_t until = Pit::jiffies + 3000;
+  while (Pit::jiffies < until) {
+    if (arp_cache_lookup(k_dual_responder_ip, learned_mac)) {
+      arp_resolved = true;
+      break;
+    }
+    if (!net_poll_once()) {
+      Thread::yield();
+    }
+  }
+  reporter.check("dual.sender.arp_resolved", arp_resolved);
+  if (arp_resolved) {
+    KPRINT("*** DUAL sender : ARP resolved 10.0.2.15\n");
   }
 
-  build_icmp_echo_request_payload(
-      frame, (const uint8_t *)k_dual_payload_text, sizeof(k_dual_payload_text) - 1);
-  auto *eth = (EthernetHeader *)frame;
-  auto *ip = (Ipv4Header *)(frame + sizeof(EthernetHeader));
-  auto *icmp =
-      (IcmpEchoHeader *)(frame + sizeof(EthernetHeader) + sizeof(Ipv4Header));
-  copy_bytes_local(eth->dst, k_dual_responder_mac, 6);
-  copy_bytes_local(eth->src, k_dual_sender_mac, 6);
-  copy_bytes_local(ip->src_ip, k_dual_sender_ip, 4);
-  copy_bytes_local(ip->dst_ip, k_dual_responder_ip, 4);
-  ip->header_checksum = 0;
-  ip->header_checksum =
-      be16(checksum16((const uint8_t *)ip, sizeof(Ipv4Header)));
-  icmp->identifier = be16(0x5151);
-  icmp->sequence = be16(1);
-  icmp->checksum = 0;
-  icmp->checksum = be16(checksum16(
-      (const uint8_t *)icmp,
-      sizeof(IcmpEchoHeader) + (sizeof(k_dual_payload_text) - 1)));
-
-  KPRINT("*** DUAL sender : ping text \"?\"\n", k_dual_payload_text);
-  reporter.check(
-      "dual.sender.icmp_request_tx",
-      net_send_raw(frame, sizeof(EthernetHeader) + sizeof(Ipv4Header) +
-                              sizeof(IcmpEchoHeader) +
-                              (sizeof(k_dual_payload_text) - 1)));
-
-  reply_len = sizeof(reply);
-  reporter.check(
-      "dual.sender.icmp_reply_rx",
-      wait_for_matching_frame(reply, &reply_len, Pit::jiffies + 3000,
-                              is_dual_icmp_reply));
-  if (is_dual_icmp_reply(reply, reply_len)) {
-    KPRINT("*** DUAL sender : peer echoed \"?\"\n", k_dual_payload_text);
+  bool sent_chat = net_chat_send(k_dual_responder_ip, k_dual_chat_sender_text);
+  reporter.check("dual.sender.chat_tx", sent_chat);
+  if (sent_chat) {
+    KPRINT("*** DUAL sender : chat TX \"?\"\n", k_dual_chat_sender_text);
   }
+
+  char chat_reply[NET_CHAT_TEXT_SIZE]{};
+  bool saw_chat_reply = false;
+  until = Pit::jiffies + 5000;
+  while (Pit::jiffies < until) {
+    if (net_chat_poll() && net_chat_recv(chat_reply, sizeof(chat_reply)) &&
+        strings_equal(chat_reply, k_dual_chat_responder_text)) {
+      saw_chat_reply = true;
+      break;
+    }
+    Thread::yield();
+  }
+
+  reporter.check("dual.sender.chat_reply_rx", saw_chat_reply);
+  if (saw_chat_reply) {
+    KPRINT("*** DUAL sender : chat RX from 10.0.2.15 \"?\"\n", chat_reply);
+    KPRINT("*** DUAL sender : PASS dual chat\n");
+  }
+
+  net_stats_print();
 }
 
 void run_dual_responder(Reporter &reporter) {
@@ -1170,28 +1560,33 @@ void run_dual_responder(Reporter &reporter) {
   demo_ip_line("responder", k_dual_responder_ip);
   demo_ip_line("peer IP  ", k_dual_sender_ip);
   reporter.check("dual.responder.ready_after_pci_init", net_ready());
+  reporter.check("dual.responder.chat_init", net_chat_init());
 
   const uint64_t until = Pit::jiffies + 5000;
-  bool saw_traffic = false;
-  bool sent_arp_reply = false;
-  bool sent_icmp_reply = false;
-  uint8_t frame[VIRTIO_NET_MAX_FRAME_SIZE]{};
+  bool saw_chat = false;
+  bool sent_chat_reply = false;
+  char text[NET_CHAT_TEXT_SIZE]{};
   while (Pit::jiffies < until) {
-    int recv_len = net_recv_raw(frame, sizeof(frame));
-    if (recv_len > 0) {
-      saw_traffic = true;
-      sent_arp_reply =
-          try_dual_send_arp_reply(frame, size_t(recv_len)) || sent_arp_reply;
-      sent_icmp_reply =
-          try_dual_send_icmp_reply(frame, size_t(recv_len)) || sent_icmp_reply;
+    if (net_chat_poll()) {
+      if (!saw_chat && net_chat_recv(text, sizeof(text)) &&
+          strings_equal(text, k_dual_chat_sender_text)) {
+        saw_chat = true;
+        KPRINT("*** DUAL responder : chat RX from 10.0.2.21 \"?\"\n", text);
+        sent_chat_reply =
+            net_chat_send(k_dual_sender_ip, k_dual_chat_responder_text);
+        if (sent_chat_reply) {
+          KPRINT("*** DUAL responder : chat TX \"?\"\n",
+                 k_dual_chat_responder_text);
+        }
+      }
       continue;
     }
     Thread::yield();
   }
 
-  reporter.check("dual.responder.saw_live_traffic", saw_traffic);
-  reporter.check("dual.responder.arp_reply_tx", sent_arp_reply);
-  reporter.check("dual.responder.icmp_reply_tx", sent_icmp_reply);
+  reporter.check("dual.responder.chat_rx", saw_chat);
+  reporter.check("dual.responder.chat_reply_tx", sent_chat_reply);
+  net_stats_print();
 }
 
 void run_dual_live_tests(Reporter &reporter, StrongRef<Ext2> fs) {
@@ -1201,12 +1596,18 @@ void run_dual_live_tests(Reporter &reporter, StrongRef<Ext2> fs) {
     return;
   }
 
+  net_stats_reset();
+  arp_cache_reset();
+  udp_clear_handlers();
+  net_chat_reset();
+
   if (role == DualRole::Sender) {
     net_set_identity(k_dual_sender_mac, k_dual_sender_ip);
     run_dual_sender(reporter);
     return;
   }
 
+  net_set_identity(k_dual_responder_mac, k_dual_responder_ip);
   run_dual_responder(reporter);
 }
 
@@ -1243,6 +1644,18 @@ void net_run_selected_tests(StrongRef<Ext2> fs) {
     break;
   case NetTestCase::Debug:
     run_debug_tests(reporter);
+    break;
+  case NetTestCase::Stats:
+    run_stats_tests(reporter);
+    break;
+  case NetTestCase::ArpCache:
+    run_arp_cache_tests(reporter);
+    break;
+  case NetTestCase::Udp:
+    run_udp_tests(reporter);
+    break;
+  case NetTestCase::Chat:
+    run_chat_tests(reporter);
     break;
   case NetTestCase::Proto:
     run_proto_tests(reporter);

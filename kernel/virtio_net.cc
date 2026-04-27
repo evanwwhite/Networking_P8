@@ -3,6 +3,7 @@
 #include "atomic.h"
 #include "debug.h"
 #include "machine.h"
+#include "net_stats.h"
 #include "pcie.h"
 #include "physmem.h"
 #include "print.h"
@@ -68,6 +69,7 @@ struct [[gnu::packed]] VirtioNetHdr {
   uint16_t gso_size;
   uint16_t csum_start;
   uint16_t csum_offset;
+  uint16_t num_buffers;
 };
 
 // Modern virtio PCI exposes this common register block through a vendor
@@ -766,7 +768,11 @@ bool net_send_raw(const uint8_t *data, size_t len) {
   }
 
   if (g_net.backend == BackendKind::Virtio) {
-    return virtio_send_raw_locked(data, len);
+    bool sent = virtio_send_raw_locked(data, len);
+    if (sent) {
+      net_stats_increment(NetStatCounter::RawTx);
+    }
+    return sent;
   }
 
   reclaim_tx_locked();
@@ -804,10 +810,12 @@ bool net_send_raw(const uint8_t *data, size_t len) {
     net_debug_dump_frame(data, len);
     complete_tx_locked(slot, len);
     reclaim_tx_locked();
+    net_stats_increment(NetStatCounter::RawTx);
     return true;
   }
 
   nic_kick_tx();
+  net_stats_increment(NetStatCounter::RawTx);
   return true;
 }
 
@@ -823,7 +831,11 @@ int net_recv_raw(uint8_t *out, size_t max_len) {
   }
 
   if (g_net.backend == BackendKind::Virtio) {
-    return virtio_recv_raw_locked(out, max_len);
+    int recv_len = virtio_recv_raw_locked(out, max_len);
+    if (recv_len > 0) {
+      net_stats_increment(NetStatCounter::RawRx);
+    }
+    return recv_len;
   }
 
   if (g_net.rx_used_consume == g_net.rx_used.idx) {
@@ -863,6 +875,7 @@ int net_recv_raw(uint8_t *out, size_t max_len) {
   KPRINT("net: rx dequeue slot=? used_consume=? ready=? len=?\n", Dec(slot),
          Dec(g_net.rx_used_consume), Dec(g_net.rx_ready), Dec(len));
 
+  net_stats_increment(NetStatCounter::RawRx);
   return int(len);
 }
 

@@ -5,6 +5,8 @@ sender_target=net_dual_sender
 responder_target=net_dual_responder
 socket_port="${DUAL_QEMU_PORT:-12345}"
 
+echo "dual demo network: QEMU socket backend on 127.0.0.1:${socket_port} (no TAP required)"
+
 UTCS_OPTS=-O3 make -s "build/${sender_target}.img" "${sender_target}.data" \
   "build/${responder_target}.img" "${responder_target}.data"
 
@@ -55,3 +57,39 @@ responder_pid=
 echo
 echo "sender log: ${sender_target}.raw"
 echo "responder log: ${responder_target}.raw"
+
+python3 - <<'PY'
+from pathlib import Path
+import re
+import sys
+
+ansi = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+def clean(path: str) -> str:
+    text = Path(path).read_text(errors="ignore")
+    text = text.replace("\x1bc", "")
+    return ansi.sub("", text)
+
+sender = clean("net_dual_sender.raw")
+responder = clean("net_dual_responder.raw")
+
+checks = [
+    ("sender", "*** DUAL sender : ARP resolved 10.0.2.15", sender),
+    ("sender", '*** DUAL sender : chat TX "hello from sender"', sender),
+    ("sender", '*** DUAL sender : chat RX from 10.0.2.15 "hello from responder"', sender),
+    ("sender", "*** DUAL sender : PASS dual chat", sender),
+    ("sender", "*** SUMMARY failures=0", sender),
+    ("responder", '*** DUAL responder : chat RX from 10.0.2.21 "hello from sender"', responder),
+    ("responder", '*** DUAL responder : chat TX "hello from responder"', responder),
+    ("responder", "*** SUMMARY failures=0", responder),
+]
+
+missing = [(side, needle) for side, needle, haystack in checks if needle not in haystack]
+if missing:
+    print("dual chat verification: fail")
+    for side, needle in missing:
+        print(f"missing in {side}: {needle}")
+    sys.exit(1)
+
+print("dual chat verification: pass")
+PY
