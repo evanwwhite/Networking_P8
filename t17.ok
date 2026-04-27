@@ -1,8 +1,0 @@
-*** opened root file, check
-*** check, first read
-*** check, seek forward
-*** check, seek backward
-*** closed
-*** reopen resets offset ok
-*** brk grow page ok
-*** everything good
