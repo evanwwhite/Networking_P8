@@ -16,4 +16,5 @@ time `make qemu_cmd` `make qemu_config_flags` \
              --monitor none \
              -drive file=build/$1.img,index=0,media=disk,format=raw,file.locking=off \
              -drive file=$1.data,index=1,media=disk,format=raw,file.locking=off \
+             `make qemu_net_flags` \
              -device isa-debug-exit,iobase=0xf4,iosize=0x04 || true

@@ -54,6 +54,8 @@ QEMU_DEBUG ?= #-d int
 
 QEMU_PREFER = ~gheith/public/tools26/bin/qemu-system-x86_64
 QEMU_CMD ?= ${shell (test -x ${QEMU_PREFER} && echo ${QEMU_PREFER}) || echo qemu-system-x86_64}
+QEMU_NETDEV ?=
+QEMU_NET_DEVICE ?= -device virtio-net-pci,disable-legacy=on,mac=52:54:00:12:34:56
 
 QEMU_CONFIG_FLAGS = -accel ${QEMU_ACCEL} \
                     -machine q35 \
@@ -69,7 +71,8 @@ QEMU_FLAGS = -no-reboot \
 	     --serial file:$*.raw \
 	     -drive file=build/$*.img,index=0,media=disk,format=raw,file.locking=off \
 	     -drive file=$*.data,index=3,media=disk,format=raw,file.locking=off \
-	     -device virtio-net-pci,disable-legacy=on,mac=52:54:00:12:34:56 \
+	     ${QEMU_NETDEV} \
+	     ${QEMU_NET_DEVICE} \
 	     -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
 
@@ -107,6 +110,10 @@ help:
 	@echo "    qemu command             : QEMU_CMD         (${QEMU_CMD})"
 	@echo "    qemu cpu                 : QEMU_CPU         (${QEMU_CPU})"
 	@echo "    simulated memory         : QEMU_MEM         (${QEMU_MEM})"
+	@echo "    qemu netdev flags        : QEMU_NETDEV      (${QEMU_NETDEV})"
+	@echo "    qemu net device flags    : QEMU_NET_DEVICE  (${QEMU_NET_DEVICE})"
+	@echo "    example TAP override     : QEMU_NETDEV='-netdev tap,id=net0,ifname=tap0,script=no,downscript=no'"
+	@echo "                               QEMU_NET_DEVICE='-device virtio-net-pci,disable-legacy=on,netdev=net0,mac=52:54:00:12:34:56'"
 	@echo "    number of cores          : QEMU_SMP         (${QEMU_SMP})"
 	@echo "    timeout                  : QEMU_TIMEOUT     (${QEMU_TIMEOUT})"
 	@echo "    timeout command          : QEMU_TIMEOUT_CMD (${QEMU_TIMEOUT_CMD})"
@@ -154,6 +161,9 @@ qemu_cmd:
 qemu_config_flags:
 	@echo "${QEMU_CONFIG_FLAGS}"
 
+qemu_net_flags:
+	@echo "${QEMU_NETDEV} ${QEMU_NET_DEVICE}"
+
 $(TESTS) : % : build/%.img;
 
 clean:
@@ -187,7 +197,7 @@ limine/limine: Makefile limine/*.c limine/*.h limine/Makefile
 LIMINE_FILES := limine.conf limine/limine-bios.sys limine/BOOTX64.EFI
 
 
-${TEST_IMAGES} : build/%.img: build/kernel.elf Makefile limine/limine %.data ${LIMINE_FILES}
+build/%.img: build/kernel.elf Makefile limine/limine %.data ${LIMINE_FILES}
 	# borrowed from https://codeberg.org/Limine/limine-cxx-template/src/branch/trunk/GNUmakefile
 	rm -f $@
 	# zero-filled 20MB raw disk image
@@ -218,7 +228,7 @@ ${TEST_RAWS} : %.raw : Makefile %
 
 BLOCK_SIZE = 4096
 
-${TEST_DATA} : %.data : Makefile
+%.data : Makefile
 	@if test -f ${TESTS_DIR}/$*.dir/Makefile; then \
 		$(MAKE) -C ${TESTS_DIR}/$*.dir; \
 	fi

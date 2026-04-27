@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+./run_dual_qemu >/dev/null
+
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+ansi = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+def clean(text: str) -> str:
+    text = text.replace("\x1bc", "")
+    text = ansi.sub("", text)
+    return text
+
+def keep_lines(path: str):
+    text = clean(Path(path).read_text(errors="ignore"))
+    lines = []
+    for line in text.splitlines():
+        if line.startswith("net: virtio-net ready"):
+            lines.append(line)
+        elif line.startswith("net: virtio tx enqueue"):
+            lines.append(line)
+        elif line.startswith("net: virtio rx dequeue"):
+            lines.append(line)
+        elif line.startswith("net: TX ARP who-has"):
+            lines.append(line)
+        elif line.startswith("net: TX UDP"):
+            lines.append(line)
+        elif line.startswith("chat: "):
+            lines.append(line)
+        if line.startswith("*** DUAL"):
+            lines.append(line)
+    return lines
+
+sender = keep_lines("net_dual_sender.raw")
+responder = keep_lines("net_dual_responder.raw")
+
+print("DUAL GUEST DEMO")
+print("")
+print("Sender guest")
+for line in sender:
+    print(line)
+print("")
+print("Responder guest")
+for line in responder:
+    print(line)
+PY

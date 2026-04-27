@@ -2,6 +2,7 @@
 #include <cstdint>
 
 constexpr uint8_t IPV4_PROTO_ICMP = 1;
+constexpr uint8_t IPV4_PROTO_UDP  = 17;
 
 struct [[gnu::packed]] Ipv4Header {
     uint8_t  version_ihl;

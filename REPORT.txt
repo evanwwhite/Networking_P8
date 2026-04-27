@@ -1,14 +1,180 @@
-* Why is it a bad idea to run system calls and interrupt
-  handlers on the user stack?
+P9 Networking Report
+====================
 
-* Can you craft a test case that breaks a kernel that does that?
+Summary
+-------
 
-* How can you defend against such attacks?
+For P9, we extended the original virtio-net raw Ethernet work into a small
+kernel networking stack and proved it with two isolated QEMU machines. The
+stack now supports raw packet movement, Ethernet dispatch, ARP, IPv4, ICMP,
+UDP, and a UDP-based chat layer. The final demo boots two copies of the OS,
+connects them through QEMU socket networking, resolves the peer with ARP, sends
+a chat message from the sender, sends a reply from the responder, and verifies
+that the sender prints `PASS dual chat`.
 
-* How can a malicious user exploit my naive implementation of write?
+The demo intentionally uses QEMU socket networking instead of TAP. This avoids
+`/dev/net/tun`, host bridge setup, and privileged host networking, which makes
+the demo easier to run in Docker and on machines where TAP access is not
+available.
 
-* explain the use of the [[gnu::force_align_arg_pointer]] attribute on
-  some functions. Why those functions? Why not all functions?
+Major implementation work
+-------------------------
 
+1. Raw virtio-net path
 
+   The kernel exposes a stable raw-packet API through `kernel/virtio_net.h` and
+   `kernel/virtio_net.cc`. Higher-level protocol code can send and receive raw
+   Ethernet frames without depending on PCI details or virtqueue internals. A
+   fake backend remains available for focused tests, while the live virtio-net
+   path is used by the two-QEMU demo.
+
+   A real device bug was fixed by correcting the virtio-net header layout. The
+   header now includes `num_buffers`, matching the device format and removing a
+   two-byte shift that had been corrupting live received Ethernet frames.
+
+2. Packet statistics and traces
+
+   We added `kernel/net_stats.h` and `kernel/net_stats.cc` with counters for raw
+   RX/TX, ARP, IPv4, ICMP, UDP, and drop cases. Protocol code now logs clearer
+   packet flow and failure reasons, including ARP requests/replies, IPv4
+   dispatch, ICMP replies, UDP receive/transmit, and malformed or irrelevant
+   packet drops.
+
+3. ARP cache
+
+   We added a fixed-size ARP cache in `kernel/arp_cache.h` and
+   `kernel/arp_cache.cc`. IPv4 sending now checks the cache before transmitting:
+   on a hit it sends immediately, and on a miss it sends an ARP request and
+   reports that the original send is pending. ARP replies and valid ARP sender
+   fields update the cache.
+
+4. IPv4, ICMP, and UDP
+
+   The IPv4 layer handles Ethernet IPv4 frames, validates destination and packet
+   shape, verifies IPv4 header checksums, and dispatches supported protocols.
+   ICMP echo requests receive echo replies. UDP support includes `UdpHeader`,
+   handler registration by port, receive dispatch, and `udp_send_to`. UDP
+   checksums are intentionally set to zero for this project stage.
+
+5. UDP chat layer
+
+   The chat layer in `kernel/net_chat.h` and `kernel/net_chat.cc` registers a
+   UDP handler on port 4390. It can send chat text, receive chat payloads into
+   an inbox, keep a history ring, sanitize non-printable bytes, and truncate
+   long messages safely.
+
+6. Two-machine messaging demo
+
+   `run_dual_qemu` builds and boots `net_dual_sender` and
+   `net_dual_responder`. The sender uses MAC `52:54:00:12:34:57` and IP
+   `10.0.2.21`. The responder uses MAC `52:54:00:12:34:56` and IP
+   `10.0.2.15`.
+
+   The exchange is driven by simple command files in each guest directory:
+   `chat_send` contains the message that VM should transmit, and `chat_expect`
+   contains the message it should verify from its peer. The default scripted
+   exchange is:
+
+   - sender attempts to send `hello from sender`
+   - sender misses in the ARP cache and broadcasts an ARP request
+   - responder answers ARP
+   - sender retries and sends the UDP chat message
+   - responder receives it and replies with `hello from responder`
+   - sender receives the reply and prints `PASS dual chat`
+
+Docker demo
+-----------
+
+The blessed entry point for the containerized messaging demo is:
+
+    ./run_dual_qemu_docker
+
+That script builds `Dockerfile.dual`, mounts this repository at `/work`, and
+runs `./run_dual_qemu` inside the container. The two QEMU processes communicate
+over `127.0.0.1:${DUAL_QEMU_PORT:-12345}` inside the container. Docker is used
+by default; Podman can be selected with `DUAL_QEMU_CONTAINER_CMD=podman`.
+
+Expected final terminal output includes:
+
+    dual chat verification: pass
+
+After the run, the main files to inspect are:
+
+    net_dual_sender.raw
+    net_dual_responder.raw
+
+The sender log should contain:
+
+    *** DUAL sender : ARP resolved 10.0.2.15
+    *** DUAL sender : chat TX "hello from sender"
+    *** DUAL sender : chat RX from 10.0.2.15 "hello from responder"
+    *** DUAL sender : PASS dual chat
+    *** SUMMARY failures=0
+
+The responder log should contain:
+
+    *** DUAL responder : chat RX from 10.0.2.21 "hello from sender"
+    *** DUAL responder : chat TX "hello from responder"
+    *** SUMMARY failures=0
+
+Tests and verification
+----------------------
+
+The networking work has focused tests for:
+
+- raw virtio-net API smoke, TX, RX, queue, and debug behavior
+- packet statistics and drop counters
+- ARP cache insert, lookup, replacement, and miss behavior
+- IPv4/ICMP protocol handling
+- UDP handler registration, dispatch, invalid packets, and sending
+- UDP chat receive, history, sanitization, truncation, and ARP-pending sends
+- live two-QEMU chat over a socket-backed virtio-net link
+
+Useful commands:
+
+    make -s net_stats.test
+    make -s net_arp_cache.test
+    make -s net_udp.test
+    make -s net_chat.test
+    make -s net_proto.test
+    ./run_dual_qemu_docker
+
+Known limitations and next steps
+--------------------------------
+
+The current chat demo is command-file driven but still batch-oriented. A
+natural next feature is a loop that reads several command lines from the guest
+disk and sends them one by one, which would be closer to an actual interactive
+messaging terminal.
+
+ARP behavior is correct for the demo, but noisy. The sender can print repeated
+ARP cache misses while waiting for the reply. A cleaner stack would track an
+"ARP request pending" state or rate-limit ARP requests for the same unresolved
+IP address.
+
+The dual-machine test proves one request/reply exchange. A stronger regression
+would send multiple messages, require the responder to echo or reply to each
+one, and verify the expected history sequence on both machines.
+
+Before final submission, generated files should be separated from source. The
+source files to keep include the kernel networking source, networking test
+directories and `.ok` files, `Dockerfile.dual`, `run_dual_qemu`,
+`run_dual_qemu_docker`, and the markdown demo documents. Build products and
+run outputs such as `build/`, `.raw`, `.out`, `.img`, `.data`, `.failure`,
+`.debug`, `.cycles`, and `.result` files should generally not be committed
+unless the course requires them.
+
+AI usage comments
+-----------------
+
+AI assistance was used as a development aid for planning, code review, and
+documentation. The AI helped summarize the networking progression, identify
+reasonable next steps, explain how to make the Docker/QEMU demo boundary clear,
+and draft report text. AI assistance was also used to inspect the repository
+state and suggest verification commands.
+
+All submitted code and documentation remain our responsibility. We reviewed the
+AI-generated suggestions, kept the implementation consistent with the existing
+kernel and test structure, and verified behavior with focused networking tests
+and the dual-QEMU chat demo.
 

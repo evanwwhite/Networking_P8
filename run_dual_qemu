@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+sender_target=net_dual_sender
+responder_target=net_dual_responder
+socket_port="${DUAL_QEMU_PORT:-12345}"
+
+echo "dual demo network: QEMU socket backend on 127.0.0.1:${socket_port} (no TAP required)"
+
+UTCS_OPTS=-O3 make -s "build/${sender_target}.img" "${sender_target}.data" \
+  "build/${responder_target}.img" "${responder_target}.data"
+
+qemu_cmd="$(make -s qemu_cmd)"
+qemu_config_flags="$(make -s qemu_config_flags)"
+
+rm -f "${sender_target}.raw" "${sender_target}.failure" \
+      "${responder_target}.raw" "${responder_target}.failure"
+
+cleanup() {
+  if [[ -n "${responder_pid:-}" ]]; then
+    kill "${responder_pid}" 2>/dev/null || true
+    wait "${responder_pid}" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+"${qemu_cmd}" ${qemu_config_flags} \
+  -no-reboot \
+  -nographic \
+  --monitor none \
+  --serial file:${responder_target}.raw \
+  -drive if=virtio,file=build/${responder_target}.img,index=0,media=disk,format=raw \
+  -drive if=virtio,file=${responder_target}.data,index=1,media=disk,format=raw \
+  -netdev socket,id=net0,listen=127.0.0.1:${socket_port} \
+  -device virtio-net-pci,disable-legacy=on,netdev=net0,mac=52:54:00:12:34:56 \
+  -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+  >"${responder_target}.failure" 2>&1 || true &
+responder_pid=$!
+
+sleep 1
+
+"${qemu_cmd}" ${qemu_config_flags} \
+  -no-reboot \
+  -nographic \
+  --monitor none \
+  --serial file:${sender_target}.raw \
+  -drive if=virtio,file=build/${sender_target}.img,index=0,media=disk,format=raw \
+  -drive if=virtio,file=${sender_target}.data,index=1,media=disk,format=raw \
+  -netdev socket,id=net0,connect=127.0.0.1:${socket_port} \
+  -device virtio-net-pci,disable-legacy=on,netdev=net0,mac=52:54:00:12:34:57 \
+  -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+  >"${sender_target}.failure" 2>&1 || true
+
+wait "${responder_pid}" || true
+responder_pid=
+
+echo
+echo "sender log: ${sender_target}.raw"
+echo "responder log: ${responder_target}.raw"
+
+python3 - <<'PY'
+from pathlib import Path
+import re
+import sys
+
+ansi = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+def command_text(path: str) -> str:
+    return Path(path).read_text(errors="ignore").strip()
+
+def clean(path: str) -> str:
+    text = Path(path).read_text(errors="ignore")
+    text = text.replace("\x1bc", "")
+    return ansi.sub("", text)
+
+sender = clean("net_dual_sender.raw")
+responder = clean("net_dual_responder.raw")
+sender_text = command_text("net_dual_sender.dir/chat_send")
+responder_text = command_text("net_dual_responder.dir/chat_send")
+
+checks = [
+    ("sender", "*** DUAL sender : ARP resolved 10.0.2.15", sender),
+    ("sender", f'*** DUAL sender : chat TX "{sender_text}"', sender),
+    ("sender", f'*** DUAL sender : chat RX from 10.0.2.15 "{responder_text}"', sender),
+    ("sender", "*** DUAL sender : PASS dual chat", sender),
+    ("sender", "*** SUMMARY failures=0", sender),
+    ("responder", f'*** DUAL responder : chat RX from 10.0.2.21 "{sender_text}"', responder),
+    ("responder", f'*** DUAL responder : chat TX "{responder_text}"', responder),
+    ("responder", "*** SUMMARY failures=0", responder),
+]
+
+missing = [(side, needle) for side, needle, haystack in checks if needle not in haystack]
+if missing:
+    print("dual chat verification: fail")
+    for side, needle in missing:
+        print(f"missing in {side}: {needle}")
+    sys.exit(1)
+
+print("dual chat verification: pass")
+PY

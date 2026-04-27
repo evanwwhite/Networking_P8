@@ -1,0 +1,16 @@
+*** PASS rx.empty_returns_zero
+*** PASS rx.inject_one_frame
+*** PASS rx.receive_one_frame_len
+*** PASS rx.receive_one_frame_bytes
+*** PASS rx.inject_exact_size_frame
+*** PASS rx.receive_exact_size_len
+*** PASS rx.receive_exact_size_bytes
+*** PASS rx.inject_small_buffer_frame
+*** PASS rx.reject_small_output_buffer
+*** PASS rx.inject_max_frame
+*** PASS rx.receive_max_frame_len
+*** PASS rx.receive_max_frame_bytes
+*** PASS rx.reject_null_inject
+*** PASS rx.reject_zero_inject
+*** PASS rx.reject_oversized_inject
+*** SUMMARY failures=0

@@ -3,6 +3,7 @@
 #include "atomic.h"
 #include "debug.h"
 #include "machine.h"
+#include "net_stats.h"
 #include "pcie.h"
 #include "physmem.h"
 #include "print.h"
@@ -52,6 +53,10 @@ struct NetState {
   uint16_t rx_used_consume = 0;
   // Number of RX packets ready for net_recv_raw().
   uint16_t rx_ready = 0;
+
+  uint8_t last_fake_tx[VIRTIO_NET_MAX_FRAME_SIZE]{};
+  uint16_t last_fake_tx_len = 0;
+  bool last_fake_tx_valid = false;
 };
 
 // Virtio-net does not place a raw Ethernet frame directly in the queue.
@@ -64,6 +69,7 @@ struct [[gnu::packed]] VirtioNetHdr {
   uint16_t gso_size;
   uint16_t csum_start;
   uint16_t csum_offset;
+  uint16_t num_buffers;
 };
 
 // Modern virtio PCI exposes this common register block through a vendor
@@ -524,6 +530,8 @@ void reset_rings_locked() {
   g_net.rx_next_probe = 0;
   g_net.rx_used_consume = 0;
   g_net.rx_ready = 0;
+  g_net.last_fake_tx_len = 0;
+  g_net.last_fake_tx_valid = false;
 
   for (uint16_t i = 0; i < VIRTIO_NET_QUEUE_SIZE; ++i) {
     reset_slot(g_net.tx_slots[i]);
@@ -760,7 +768,11 @@ bool net_send_raw(const uint8_t *data, size_t len) {
   }
 
   if (g_net.backend == BackendKind::Virtio) {
-    return virtio_send_raw_locked(data, len);
+    bool sent = virtio_send_raw_locked(data, len);
+    if (sent) {
+      net_stats_increment(NetStatCounter::RawTx);
+    }
+    return sent;
   }
 
   reclaim_tx_locked();
@@ -792,13 +804,18 @@ bool net_send_raw(const uint8_t *data, size_t len) {
   if (g_net.backend == BackendKind::Fake) {
     // The fake backend completes transmission immediately without real hardware.
     KPRINT("net: fake tx len=?\n", Dec(len));
+    copy_bytes(g_net.last_fake_tx, data, len);
+    g_net.last_fake_tx_len = uint16_t(len);
+    g_net.last_fake_tx_valid = true;
     net_debug_dump_frame(data, len);
     complete_tx_locked(slot, len);
     reclaim_tx_locked();
+    net_stats_increment(NetStatCounter::RawTx);
     return true;
   }
 
   nic_kick_tx();
+  net_stats_increment(NetStatCounter::RawTx);
   return true;
 }
 
@@ -814,7 +831,11 @@ int net_recv_raw(uint8_t *out, size_t max_len) {
   }
 
   if (g_net.backend == BackendKind::Virtio) {
-    return virtio_recv_raw_locked(out, max_len);
+    int recv_len = virtio_recv_raw_locked(out, max_len);
+    if (recv_len > 0) {
+      net_stats_increment(NetStatCounter::RawRx);
+    }
+    return recv_len;
   }
 
   if (g_net.rx_used_consume == g_net.rx_used.idx) {
@@ -854,6 +875,7 @@ int net_recv_raw(uint8_t *out, size_t max_len) {
   KPRINT("net: rx dequeue slot=? used_consume=? ready=? len=?\n", Dec(slot),
          Dec(g_net.rx_used_consume), Dec(g_net.rx_ready), Dec(len));
 
+  net_stats_increment(NetStatCounter::RawRx);
   return int(len);
 }
 
@@ -892,6 +914,21 @@ bool net_fake_inject_rx(const uint8_t *data, size_t len) {
   KPRINT("net: fake rx inject slot=? ready=? len=?\n", Dec(slot),
          Dec(g_net.rx_ready), Dec(len));
   net_debug_dump_frame(data, len);
+  return true;
+}
+
+bool net_copy_last_tx_for_test(uint8_t *out, size_t *len_in_out) {
+  if (out == nullptr || len_in_out == nullptr) {
+    return false;
+  }
+
+  LockGuard guard{g_net.lock};
+  if (!g_net.last_fake_tx_valid || *len_in_out < g_net.last_fake_tx_len) {
+    return false;
+  }
+
+  copy_bytes(out, g_net.last_fake_tx, g_net.last_fake_tx_len);
+  *len_in_out = g_net.last_fake_tx_len;
   return true;
 }
 
