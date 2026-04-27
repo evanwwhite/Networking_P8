@@ -1,5 +1,9 @@
 # net_arp_cache
 
+AI assistance note: AI was used as a development aid for planning, debugging,
+review, and documentation. The team reviewed the output and is responsible for
+the submitted work.
+
 This test exercises the Phase 2 ARP cache work.
 
 It verifies that:

@@ -1,6 +1,10 @@
 P9 Networking Report
 ====================
 
+AI assistance note: AI was used as a development aid for planning, debugging,
+review, and documentation. The team reviewed the output and is responsible for
+the submitted work.
+
 Summary
 -------
 
@@ -177,4 +181,3 @@ All submitted code and documentation remain our responsibility. We reviewed the
 AI-generated suggestions, kept the implementation consistent with the existing
 kernel and test structure, and verified behavior with focused networking tests
 and the dual-QEMU chat demo.
-

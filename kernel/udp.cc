@@ -1,5 +1,9 @@
 #include "udp.h"
 
+// AI assistance note: AI was used to help plan, review, and document this
+// networking code. The implementation was integrated, tested, and reviewed by
+// the team.
+
 #include "atomic.h"
 #include "ipv4.h"
 #include "net_proto.h"
@@ -114,6 +118,8 @@ bool udp_handle_packet(const uint8_t src_ip[4], const uint8_t *data,
 
 bool udp_send_to(const uint8_t dst_ip[4], uint16_t src_port, uint16_t dst_port,
                  const uint8_t *payload, std::size_t payload_len) {
+  // UDP checksum is intentionally omitted for this project stage; IPv4 still
+  // carries the packet and the demo verifies payload delivery.
   if (dst_ip == nullptr || src_port == 0 || dst_port == 0 ||
       (payload == nullptr && payload_len != 0) ||
       payload_len > 0xffffU - sizeof(UdpHeader)) {

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# AI assistance note: AI was used to help document and refine this demo runner.
+# The script was reviewed and tested by the team.
+
 sender_target=net_dual_sender
 responder_target=net_dual_responder
 socket_port="${DUAL_QEMU_PORT:-12345}"

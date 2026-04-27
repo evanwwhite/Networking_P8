@@ -1,5 +1,9 @@
 #include "virtio_net.h"
 
+// AI assistance note: AI was used to help plan, review, and document this
+// networking code. The implementation was integrated, tested, and reviewed by
+// the team.
+
 #include "atomic.h"
 #include "debug.h"
 #include "machine.h"
@@ -758,6 +762,8 @@ bool net_ready() {
 }
 
 bool net_send_raw(const uint8_t *data, size_t len) {
+  // The public API validates caller input before touching queue state so
+  // protocol code gets clean failures instead of kernel panics.
   if (data == nullptr || len == 0 || len > VIRTIO_NET_MAX_FRAME_SIZE) {
     return false;
   }
@@ -821,6 +827,8 @@ bool net_send_raw(const uint8_t *data, size_t len) {
 
 // dequeues recieved packet from rx virtio queue and is copied into out
 int net_recv_raw(uint8_t *out, size_t max_len) {
+  // Returning 0 for "no packet available" keeps polling protocol tests simple
+  // and avoids treating an empty RX queue as an error.
   if (out == nullptr || max_len == 0) {
     return -1;
   }

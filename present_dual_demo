@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# AI assistance note: AI was used to help document and refine this demo runner.
+# The script was reviewed and tested by the team.
+
 cd "$(dirname "$0")"
 
 ./run_dual_qemu >/dev/null

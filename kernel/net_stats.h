@@ -1,5 +1,9 @@
 #pragma once
 
+// AI assistance note: AI was used to help plan, review, and document this
+// networking code. The implementation was integrated, tested, and reviewed by
+// the team.
+
 #include <cstdint>
 
 struct NetStats {

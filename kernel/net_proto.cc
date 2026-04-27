@@ -1,5 +1,9 @@
 #include "net_proto.h"
 
+// AI assistance note: AI was used to help plan, review, and document this
+// networking code. The implementation was integrated, tested, and reviewed by
+// the team.
+
 #include "arp.h"
 #include "arp_cache.h"
 #include "ethernet.h"
@@ -478,6 +482,8 @@ bool net_send_ipv4(const uint8_t dst_ip[4], uint8_t protocol,
     }
 
     uint8_t dst_mac[6]{};
+    // ARP cache lookup keeps IPv4 sending independent from Ethernet address
+    // resolution details.
     if (!arp_cache_lookup(dst_ip, dst_mac)) {
         KPRINT("net: ARP lookup ");
         log_ip_inline(dst_ip);

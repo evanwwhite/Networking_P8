@@ -1,5 +1,9 @@
 #include "arp_cache.h"
 
+// AI assistance note: AI was used to help plan, review, and document this
+// networking code. The implementation was integrated, tested, and reviewed by
+// the team.
+
 #include "atomic.h"
 #include "print.h"
 #include "spin_lock.h"
@@ -69,6 +73,8 @@ void arp_cache_reset() {
 }
 
 void arp_cache_insert(const uint8_t ip[4], const uint8_t mac[6]) {
+  // The cache is intentionally fixed-size so the kernel networking path does
+  // not depend on dynamic allocation.
   if (ip == nullptr || mac == nullptr) {
     return;
   }

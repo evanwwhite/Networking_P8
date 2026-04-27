@@ -1,4 +1,9 @@
 #pragma once
+
+// AI assistance note: AI was used to help plan, review, and document this
+// networking code. The implementation was integrated, tested, and reviewed by
+// the team.
+
 #include <cstdint>
 
 constexpr uint16_t ETH_TYPE_ARP  = 0x0806;

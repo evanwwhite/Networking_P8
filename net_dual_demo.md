@@ -1,5 +1,9 @@
 # net_dual_demo
 
+AI assistance note: AI was used as a development aid for planning, debugging,
+review, and documentation. The team reviewed the output and is responsible for
+the submitted work.
+
 This boots two QEMU guests on one internal QEMU socket link. It does not use
 TAP, `/dev/net/tun`, host forwarding, or privileged host networking.
 

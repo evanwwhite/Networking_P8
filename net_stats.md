@@ -1,5 +1,9 @@
 # net_stats
 
+AI assistance note: AI was used as a development aid for planning, debugging,
+review, and documentation. The team reviewed the output and is responsible for
+the submitted work.
+
 This test exercises the Phase 1 networking observability work.
 
 It verifies that the kernel records packet statistics for:

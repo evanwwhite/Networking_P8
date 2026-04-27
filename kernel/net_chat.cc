@@ -1,5 +1,9 @@
 #include "net_chat.h"
 
+// AI assistance note: AI was used to help plan, review, and document this
+// networking code. The implementation was integrated, tested, and reviewed by
+// the team.
+
 #include "atomic.h"
 #include "net_proto.h"
 #include "print.h"
@@ -79,6 +83,8 @@ void print_ip(const uint8_t ip[4]) {
 
 void chat_udp_handler(const uint8_t src_ip[4], uint16_t src_port,
                       const uint8_t *payload, std::size_t payload_len) {
+  // Chat payloads are sanitized before logging so packet data cannot corrupt
+  // the serial output used by automated tests.
   ChatMessage message{};
   message.valid = true;
   copy_bytes(message.src_ip, src_ip, 4);

@@ -1,5 +1,9 @@
 #include "virtio_net_tests.h"
 
+// AI assistance note: AI was used to help structure these networking tests and
+// clarify expected packet behavior. The tests were adapted to this kernel and
+// verified by the team.
+
 #include "arp.h"
 #include "arp_cache.h"
 #include "ethernet.h"

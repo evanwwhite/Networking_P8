@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# AI assistance note: AI was used to help document and refine this demo runner.
+# The script was reviewed and tested by the team.
+
 image="${DUAL_QEMU_DOCKER_IMAGE:-networking-p8-dual}"
 container_cmd="${DUAL_QEMU_CONTAINER_CMD:-docker}"
 

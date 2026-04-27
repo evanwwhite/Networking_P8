@@ -1,5 +1,9 @@
 # net_demo
 
+AI assistance note: AI was used as a development aid for planning, debugging,
+review, and documentation. The team reviewed the output and is responsible for
+the submitted work.
+
 This demo is meant for a short class presentation.
 
 It exercises the protocol layer on top of the fake NIC backend, so the run is

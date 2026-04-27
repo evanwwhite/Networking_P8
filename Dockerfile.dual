@@ -1,3 +1,6 @@
+## AI assistance note: AI was used to help document and refine this demo
+## container. The file was reviewed and tested by the team.
+
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive

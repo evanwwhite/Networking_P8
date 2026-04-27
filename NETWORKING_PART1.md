@@ -1,5 +1,9 @@
 # Networking Part 1: Virtio-Net Bring-Up
 
+AI assistance note: AI was used as a development aid for planning, debugging,
+review, and documentation. The team reviewed the output and is responsible for
+the submitted work.
+
 This change makes the kernel discover and initialize QEMU's modern virtio-net
 PCI device. The goal of this stage is not full networking yet; it is to wake the
 NIC, negotiate a minimal virtio contract, configure RX/TX queues, and mark the
@@ -134,4 +138,3 @@ This stage does not implement full networking. Remaining future work includes:
 - Interrupt or MSI/MSI-X handling.
 - Control queue support.
 - Packet-level integration tests against real RX/TX traffic.
-
