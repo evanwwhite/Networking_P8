@@ -119,7 +119,7 @@ Edit `chat_send` to change what a VM sends. Keep the peer `chat_expect` file in 
 ## Documentation
 
 - `REPORT.txt`: final project report and implementation summary.
-- `NETWORKING_PART1.md`: virtio-net PCI/device bring-up notes.
+- `VIRTIO_NET_BRINGUP.md`: virtio-net PCI/device bring-up notes.
 - `net_demo.md`: deterministic fake-backend protocol demo.
 - `net_dual_demo.md`: two-QEMU chat demo details.
 - `net_stats.md`, `net_arp_cache.md`, `net_udp.md`, `net_chat.md`: focused test descriptions.

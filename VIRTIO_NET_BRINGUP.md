@@ -1,4 +1,4 @@
-# Networking Part 1: Virtio-Net Bring-Up
+# Virtio-Net Bring-Up
 
 AI assistance note: AI was used as a development aid for planning, debugging,
 review, and documentation. The team reviewed the output and is responsible for
